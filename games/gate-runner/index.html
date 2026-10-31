@@ -21,6 +21,7 @@
     <div id="gateLabels" aria-hidden="true"></div>
     <div id="hud">
       <div class="hud-row">
+        <div class="pill"><span>关卡</span><b id="levelNum">1</b></div>
         <div class="pill"><span>人数</span><b id="people">10</b></div>
         <div class="pill"><span>火力</span><b id="fire">1</b></div>
         <div class="pill"><span>分数</span><b id="score">0</b></div>
@@ -31,9 +32,10 @@
 
     <div id="overlay" class="overlay">
       <div class="card">
-        <div class="eyebrow">PR1 竖屏切片</div>
+        <div class="eyebrow">PR2 · 十关战役</div>
         <h1>向末日开炮</h1>
-        <p>自动狂奔 · 射门改数字 · 撞门加人 / 加火力 · 清僵尸</p>
+        <p id="startMeta">第 1 关 · 教程短关</p>
+        <p class="sub">自动狂奔 · 射门改数字 · 撞门加人/火力 · 6 种怪物 + 巨龙 Boss</p>
         <button id="btnStart" class="cta">开始关卡 1</button>
         <a class="back" href="../../">← 返回合集门户</a>
       </div>
@@ -44,14 +46,16 @@
         <div class="eyebrow" id="settleTitle">关卡结算</div>
         <h1 id="settleResult">胜利</h1>
         <div class="stars" id="stars">★ ★ ★</div>
+        <div class="star-hint" id="starHint"></div>
         <div class="stats">
           <div><span>分数</span><b id="settleScore">0</b></div>
           <div><span>击杀</span><b id="settleKills">0</b></div>
           <div><span>人数</span><b id="settlePeople">0</b></div>
+          <div><span>火力</span><b id="settleFire">0</b></div>
         </div>
         <div class="settle-actions">
           <button id="btnRetry" class="cta">再试一次</button>
-          <button id="btnNext" class="cta ghost" disabled title="后续关卡开发中">下一关（未开放）</button>
+          <button id="btnNext" class="cta ghost" disabled title="通关后解锁下一关">下一关（未解锁）</button>
         </div>
         <a class="back" href="../../">← 返回合集门户</a>
       </div>

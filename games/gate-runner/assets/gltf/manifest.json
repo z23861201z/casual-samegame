@@ -105,12 +105,6 @@
     "bytes": 981672
   },
   {
-    "name": "Traffic Cone",
-    "id": "aDIrUbMbW3",
-    "file": "traffic-cone.glb",
-    "src": "https://static.poly.pizza/846de5e8-b6bf-4f84-ba21-54187a473c74.glb"
-  },
-  {
     "name": "Traffic Barrier",
     "id": "cM3aJPU9NS",
     "file": "traffic-barrier.glb",
@@ -132,15 +126,35 @@
     "bytes": 42968
   },
   {
-    "name": "Street Straight Crack",
-    "id": "l7c8pppfFj",
-    "file": "street-straight-crack.glb",
-    "src": "https://static.poly.pizza/5914b4da-ef5b-4ec3-97c7-f1f62c745f52.glb"
+    "name": "Orc",
+    "id": "5vO2YJsPEf",
+    "file": "orc.glb",
+    "src": "https://static.poly.pizza/52a479b3-a635-4a23-92cb-6697eaa5eed5.glb",
+    "pack": "Ultimate Monsters",
+    "bytes": 512984
   },
   {
-    "name": "Traffic Barrier",
-    "id": "nugx3heueH",
-    "file": "traffic-barrier.glb",
-    "src": "https://static.poly.pizza/17611df7-a65e-4c71-8e45-e36ecabc608b.glb"
+    "name": "Demon",
+    "id": "Mo2ky6vkf8",
+    "file": "demon.glb",
+    "src": "https://static.poly.pizza/c2e39eb4-4b8e-4d31-b014-d637bf4e15c6.glb",
+    "pack": "Ultimate Monsters",
+    "bytes": 321140
+  },
+  {
+    "name": "Yeti",
+    "id": "ceRHrn8HHE",
+    "file": "yeti.glb",
+    "src": "https://static.poly.pizza/40a831b3-686a-4af8-b189-a13b38a3c26a.glb",
+    "pack": "Ultimate Monsters",
+    "bytes": 423024
+  },
+  {
+    "name": "Dragon Evolved",
+    "id": "LlwD0QNUPj",
+    "file": "dragon-evolved.glb",
+    "src": "https://static.poly.pizza/90ed3740-d8c4-4910-88ce-ac2ed426022d.glb",
+    "pack": "Ultimate Monsters",
+    "bytes": 436000
   }
 ]

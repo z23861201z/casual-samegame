@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Re-download Quaternius Post Apocalypse GLBs used by Gate Runner (CC0).
+# Re-download Quaternius Post Apocalypse + Ultimate Monsters GLBs used by Gate Runner (CC0).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DEST="$ROOT/assets/gltf"
