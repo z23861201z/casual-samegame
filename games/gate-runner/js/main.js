@@ -25,8 +25,7 @@ const ASSET = {
   cone: 'assets/gltf/traffic-cone.glb',
   light: 'assets/gltf/street-light.glb',
   hydrant: 'assets/gltf/fire-hydrant.glb',
-  trash: 'assets/gltf/trash-bag.glb',
-  rifle: 'assets/gltf/rifle.glb'
+  trash: 'assets/gltf/trash-bag.glb'
 };
 
 const canvas = document.getElementById('c');
@@ -69,8 +68,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
-const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 2.6, -6.0);
+const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.3, 200);
+camera.position.set(0, 3.8, -11);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -113,6 +112,8 @@ const gates = [];
 const zombies = [];
 const bullets = [];
 const floats = [];
+const DEBUG = new URLSearchParams(location.search).has('debug');
+let debugEl = null;
 
 function setLoad(p, msg) {
   loadBar.style.width = `${Math.floor(p * 100)}%`;
@@ -275,19 +276,19 @@ function buildRoad(length) {
     if (i % 2 === 0) {
       const { root: bar } = cloneModel(i % 4 === 0 ? 'barrier' : 'plastic', 1);
       fitProp(bar, 1.2);
-      bar.position.set((i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 1.3), 0, i * segLen + 2);
+      placeOnGround(bar, (i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 1.3), i * segLen + 2);
       roadGroup.add(bar);
     }
     if (i % 3 === 0) {
       const { root: barrel } = cloneModel('barrel', 1);
       fitProp(barrel, 0.9);
-      barrel.position.set((i % 6 === 0 ? 1 : -1) * (level.roadHalfWidth + 1.8), 0, i * segLen + 5);
+      placeOnGround(barrel, (i % 6 === 0 ? 1 : -1) * (level.roadHalfWidth + 1.8), i * segLen + 5);
       roadGroup.add(barrel);
     }
     if (i % 4 === 1) {
       const { root: light } = cloneModel('light', 1);
       fitProp(light, 2.4);
-      light.position.set(-level.roadHalfWidth - 2.2, 0, i * segLen + 3);
+      placeOnGround(light, -level.roadHalfWidth - 2.2, i * segLen + 3);
       roadGroup.add(light);
     }
   }
@@ -301,15 +302,63 @@ function buildRoad(length) {
   roadGroup.add(slab);
 }
 
+/** Scale only. Prefers height; falls back to max-axis if Y is tiny (avoids giant barrels/dragons). */
 function fitProp(root, targetHeight) {
+  const prev = root.position.clone();
+  root.position.set(0, 0, 0);
+  root.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(root);
   const size = new THREE.Vector3();
   box.getSize(size);
-  if (size.y < 1e-3) return;
-  const s = targetHeight / size.y;
+  const maxAxis = Math.max(size.x, size.y, size.z);
+  if (maxAxis < 1e-3) {
+    root.position.copy(prev);
+    return { scale: 1, groundY: 0 };
+  }
+  // Pathological flat/thin Y (rifle, some dragon rests) → scale by longest axis.
+  let s;
+  if (size.y < 1e-3 || size.y < maxAxis * 0.12 || (targetHeight / Math.max(size.y, 1e-6)) > 12) {
+    s = targetHeight / maxAxis;
+  } else {
+    s = targetHeight / size.y;
+  }
   root.scale.setScalar(s);
+  root.updateMatrixWorld(true);
   const box2 = new THREE.Box3().setFromObject(root);
-  root.position.y -= box2.min.y;
+  const groundY = -box2.min.y;
+  root.position.copy(prev);
+  return { scale: s, groundY };
+}
+
+/** Scale by longest axis (safe for thin rifle meshes). */
+function fitByMaxAxis(root, targetLen) {
+  const prev = root.position.clone();
+  root.position.set(0, 0, 0);
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const m = Math.max(size.x, size.y, size.z);
+  if (m < 1e-3) {
+    root.position.copy(prev);
+    return { scale: 1, groundY: 0 };
+  }
+  const s = targetLen / m;
+  root.scale.setScalar(s);
+  root.updateMatrixWorld(true);
+  const box2 = new THREE.Box3().setFromObject(root);
+  const groundY = -box2.min.y;
+  root.position.copy(prev);
+  return { scale: s, groundY };
+}
+
+/** Set x/z and lift so world Box3.min.y == 0 after current scale/children. */
+function placeOnGround(root, x, z) {
+  root.position.set(x, 0, z);
+  root.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(root);
+  root.position.y = -box.min.y;
+  return root.position.y;
 }
 
 function gateLabelText(gate) {
@@ -396,17 +445,40 @@ function spawnEnemy(ev, i, count) {
   const assetKey = kindToAssetKey(kind);
   const isBoss = ev.type === 'boss' || kind === 'dragon-evolved' && ev.hp >= 40;
   const { root, mixer, actions } = cloneModel(assetKey, 1);
-  const height = enemyHeight(kind, isBoss, ev.scale || null);
-  // Readable debut: large on-screen models; showcase logic freezes them ~9m ahead.
+  // Boss heights capped so mesh never swallows the follow cam.
+  let height = enemyHeight(kind, isBoss, ev.scale || null);
+  const bossLike = isBoss || ev.type === 'boss' || kind === 'dragon-evolved';
+  if (bossLike) {
+    height = ev.mini ? 2.2 : 3.2;
+  }
+  // Readable debut: larger on-screen models; showcase freezes them ~9.2m ahead.
   const readable = !!ev.readableWave;
-  fitProp(root, readable ? height * 1.55 : height);
+  if (bossLike) {
+    // Prefer target height, then cap wingspan so the mesh never swallows the cam.
+    fitProp(root, height);
+    root.updateMatrixWorld(true);
+    const b = new THREE.Box3().setFromObject(root);
+    const sz = new THREE.Vector3();
+    b.getSize(sz);
+    const span = Math.max(sz.x, sz.z);
+    const maxSpan = height * 1.55;
+    if (span > maxSpan && span > 1e-3) {
+      root.scale.multiplyScalar(maxSpan / span);
+    }
+  } else {
+    fitProp(root, readable ? height * 1.45 : height);
+  }
   const spread = ev.spread || 2.2;
   const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
   const zJitter = readable ? (Math.random() - 0.5) * 0.2 : (Math.random() - 0.5) * 1.2;
-  // Spawn at event z (no far offset) so autofire cannot delete them off-screen first.
-  const z = (ev.z || 0) + zJitter;
-  root.position.set(x, 0, z);
+  // Spawn at event z; bosses always well ahead of cam (never on near plane).
+  let z = (ev.z || 0) + zJitter;
+  if (bossLike) {
+    z = Math.max(z, ev.z || 0, 36);
+  }
+  // Quaternius +Z forward: Math.PI faces -Z toward player/camera behind.
   root.rotation.y = Math.PI;
+  const groundY = placeOnGround(root, x, z);
   entityGroup.add(root);
 
   if (isBoss || assetKey === 'dragonEvolved' || assetKey === 'demon') {
@@ -418,6 +490,7 @@ function spawnEnemy(ev, i, count) {
   const enemy = {
     root, mixer, actions,
     hp: ev.hp, maxHp: ev.hp, x, z,
+    groundY,
     dead: false, hitCooldown: 0,
     kind, isBoss: !!isBoss || ev.type === 'boss',
     mini: !!ev.mini,
@@ -492,23 +565,15 @@ function spawnPlayer() {
   squad = [];
   const { root, mixer, actions } = cloneModel('sam', 1);
   fitProp(root, 1.75);
-  root.position.set(0, 0, 0);
   root.rotation.y = 0;
+  const groundY = placeOnGround(root, 0, 0);
   world.add(root);
   playerRoot = root;
   playerMixer = mixer;
   playerActions = actions;
+  // Run_Gun already carries an embedded weapon — no separate rifle glTF (avoids giant barrels).
   playAnim(actions, ['Run_Gun', 'Run', 'Idle_Gun', 'Idle']);
-  squad.push({ root, mixer, actions });
-
-  // Compact lead-only prop; clones never get rifles (avoids near-plane gun wall).
-  if (templates.rifle) {
-    const { root: gun } = cloneModel('rifle', 1);
-    fitProp(gun, 0.32);
-    gun.position.set(0.22, 0.92, 0.28);
-    gun.rotation.y = Math.PI;
-    root.add(gun);
-  }
+  squad.push({ root, mixer, actions, groundY });
 }
 
 function syncSquadCount() {
@@ -517,10 +582,11 @@ function syncSquadCount() {
   while (squad.length < want) {
     const { root, mixer, actions } = cloneModel('sam', 1);
     fitProp(root, 1.55);
+    const groundY = placeOnGround(root, 0, state ? state.z : 0);
     world.add(root);
     // Clones: locomotion only — no rifle mesh, no Run_Gun (embedded weapon poses).
     playAnim(actions, ['Run', 'Idle']);
-    squad.push({ root, mixer, actions });
+    squad.push({ root, mixer, actions, groundY });
   }
   while (squad.length > want) {
     const s = squad.pop();
@@ -528,17 +594,18 @@ function syncSquadCount() {
   }
   // Lead on lane center; clones side-only (never stacked into camera near-plane).
   squad.forEach((s, i) => {
+    const gy = s.groundY ?? 0;
     if (i === 0) {
       s.root.position.x = playerX;
       s.root.position.z = state.z;
-      s.root.position.y = 0;
+      s.root.position.y = gy;
       return;
     }
     const side = (i % 2 === 0) ? 1 : -1;
     const rank = Math.ceil(i / 2);
     s.root.position.x = playerX + side * Math.min(1.55, 0.72 * rank);
     s.root.position.z = state.z; // same depth as lead — side flank only
-    s.root.position.y = 0;
+    s.root.position.y = gy;
   });
 }
 
@@ -561,9 +628,14 @@ function spawnFloat(text, pos, color = '#fff', opts = {}) {
         floats.splice(i, 1);
       }
     }
-  } else if (floats.length >= 3) {
-    const old = floats.shift();
-    old.el.remove();
+  } else {
+    // Combat floats: only 1 non-gate float at a time (replace previous → no -2-2-2 stack).
+    for (let i = floats.length - 1; i >= 0; i--) {
+      if (!floats[i].gate) {
+        floats[i].el.remove();
+        floats.splice(i, 1);
+      }
+    }
   }
   const el = document.createElement('div');
   el.textContent = text;
@@ -598,7 +670,7 @@ function updateGateLabels() {
   const MAX_AHEAD = 18;
   const pairMap = new Map();
   for (const g of gates) {
-    if (g.consumed || g.op === 'finish' || !g.visual?.userData?.labelEl) continue;
+    if (g.consumed || g.op === 'finish') continue;
     const dz = g.z - zNow;
     if (dz < -1.2 || dz > MAX_AHEAD) continue;
     const key = Math.round(g.z * 10) / 10;
@@ -609,10 +681,16 @@ function updateGateLabels() {
   const show = new Set(nearestZs);
 
   for (const g of gates) {
+    if (g.op === 'finish') continue;
+    const key = Math.round(g.z * 10) / 10;
+    const isNearest = show.has(key) && !g.consumed;
+    // Hide non-nearest pair 3D panels too (not just HTML labels).
+    if (g.visual && !g.consumed) {
+      g.visual.visible = !!isNearest;
+    }
     const el = g.visual?.userData?.labelEl;
     if (!el) continue;
-    const key = Math.round(g.z * 10) / 10;
-    const allowed = show.has(key) && !g.consumed && g.op !== 'finish' && g.visual.visible !== false && running;
+    const allowed = isNearest && running && g.visual.visible !== false;
     if (!allowed) {
       el.style.display = 'none';
       continue;
@@ -767,8 +845,9 @@ function update(dt) {
         z.showcaseT = 0;
         z.z = state.z + 9.2;
         if (!z.showcaseScaled) {
-          z.root.scale.multiplyScalar(1.12);
+          z.root.scale.multiplyScalar(1.18);
           z.showcaseScaled = true;
+          z.groundY = placeOnGround(z.root, z.root.position.x, z.z);
         }
         playAnim(z.actions, ['Idle', 'Walk']);
       }
@@ -789,6 +868,7 @@ function update(dt) {
 
     z.root.position.z = z.z;
     z.root.position.x += (z.x - z.root.position.x) * dt * 2;
+    z.root.position.y = z.groundY ?? 0; // keep grounded after x/z updates
     z.hitCooldown = Math.max(0, z.hitCooldown - dt);
 
     if (z.isBoss) {
@@ -981,21 +1061,54 @@ function render() {
 
   shake = Math.max(0, shake - dt * 1.8);
   const z0 = state ? state.z : 0;
-  // Classic follow cam: behind Sam, lookAt chest — NOT far down the road.
-  const camX = playerX * 0.15 + (Math.random() - 0.5) * shake * 0.35;
-  const camY = 2.65 + (Math.random() - 0.5) * shake * 0.15;
-  const camZ = z0 - 6.0;
+  // Follow cam: behind Sam, mid-frame whole run (menu + in-run same framing).
+  // Director band: camZ≈state.z-10..-12, camY≈3.6..4.0, lookAt≈(playerX, 1.1, state.z+1.5).
+  const camX = playerX * 0.12 + (Math.random() - 0.5) * shake * 0.35;
+  const camY = 3.8 + (Math.random() - 0.5) * shake * 0.15;
+  const camZ = z0 - 11;
   camera.position.set(camX, camY, camZ);
-  // Slight lookahead ≤ +1.0 keeps Sam vertically centered in portrait.
-  camera.lookAt(playerX, 1.42, z0 + 0.85);
+  camera.lookAt(playerX, 1.1, z0 + 1.5);
   camera.updateMatrixWorld();
 
   updateFloats(dt);
   updateGateLabels();
+  if (DEBUG) updateDebugOverlay(camX, camY, camZ);
 
   city.position.z = (state ? state.z * 0.35 : 0);
   composer.render();
   requestAnimationFrame(render);
+}
+
+function updateDebugOverlay(camX, camY, camZ) {
+  if (!debugEl) {
+    debugEl = document.createElement('div');
+    debugEl.id = 'debugOverlay';
+    debugEl.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:40;padding:6px 8px;background:rgba(0,0,0,.65);color:#9f6;font:12px/1.35 monospace;white-space:pre;pointer-events:none;';
+    document.body.appendChild(debugEl);
+  }
+  let enemyLine = 'enemy: none';
+  const live = zombies.find(z => !z.dead && z.root?.visible !== false);
+  if (live?.root) {
+    live.root.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(live.root);
+    enemyLine = `enemy min.y=${box.min.y.toFixed(3)} gy=${(live.groundY ?? 0).toFixed(3)} z=${live.z.toFixed(1)}`;
+  }
+  debugEl.textContent = `cam (${camX.toFixed(2)}, ${camY.toFixed(2)}, ${camZ.toFixed(2)})\n${enemyLine}`;
+  window.__grDbg = {
+    cam: { x: camX, y: camY, z: camZ },
+    enemies: zombies.filter(z => !z.dead).map(z => {
+      z.root.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(z.root);
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      return {
+        kind: z.kind, isBoss: !!z.isBoss, z: +z.z.toFixed(2), gy: z.groundY,
+        scale: +z.root.scale.x.toFixed(3), minY: +box.min.y.toFixed(3),
+        size: [+size.x.toFixed(2), +size.y.toFixed(2), +size.z.toFixed(2)]
+      };
+    }),
+    squad: squad.map(s => ({ scale: +s.root.scale.x.toFixed(3), y: +s.root.position.y.toFixed(3), gy: s.groundY }))
+  };
 }
 
 (async function boot() {
