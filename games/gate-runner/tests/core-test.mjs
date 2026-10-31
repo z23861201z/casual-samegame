@@ -1,5 +1,5 @@
 import {
-  applyGate, shootGate, damageZombie, collideCost, fireStats, starRating,
+  applyGate, shootGate, damageZombie, collideCost, bossCollideLoss, fireStats, starRating,
   createLevelState, progress, kindToAssetKey, enemyHeight
 } from '../js/core.js';
 import { readFileSync } from 'node:fs';
@@ -24,6 +24,12 @@ const z = damageZombie({ hp: 5 }, 5);
 assert(z.dead && z.hp === 0, 'zombie dead');
 
 assert(collideCost(5, 4) === 3, 'collide cost');
+// Boss bumps: flat chip (mini ≤2, finale 3) — never hp/2 wipe from 45/120 HP dragons
+assert(bossCollideLoss(true) === 2, 'mini boss collide loss');
+assert(bossCollideLoss(false) === 3, 'finale boss collide loss');
+assert(collideCost(10, 45, { boss: true, mini: true }) === 8, 'mini boss collide people');
+assert(collideCost(10, 120, { boss: true, mini: false }) === 7, 'finale boss collide people');
+assert(collideCost(10, 45) === 0, 'legacy collide still harsh without boss flag');
 assert(fireStats(9, 2).pellets >= 2, 'pellets');
 
 // Legacy stars

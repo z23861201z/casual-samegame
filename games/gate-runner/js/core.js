@@ -30,9 +30,21 @@ export function damageZombie(z, damage) {
   return { ...z, hp, dead: hp <= 0 };
 }
 
-export function collideCost(people, enemyHp) {
-  const loss = Math.max(1, Math.ceil(enemyHp / 2));
+/** Squad loss on body contact. Bosses use a flat chip so high HP cannot wipe instantly. */
+export function collideCost(people, enemyHp, { boss = false, mini = false } = {}) {
+  let loss;
+  if (boss) {
+    // Mini (L5): 1–2; finale: small chip, never hp/2 wipe.
+    loss = mini ? 2 : 3;
+  } else {
+    loss = Math.max(1, Math.ceil(enemyHp / 2));
+  }
   return Math.max(0, people - loss);
+}
+
+/** Flat people lost on one boss bump (for HUD float / tests). */
+export function bossCollideLoss(mini = false) {
+  return mini ? 2 : 3;
 }
 
 export function fireStats(people, firepower) {
