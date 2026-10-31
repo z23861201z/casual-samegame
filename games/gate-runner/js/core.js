@@ -106,11 +106,11 @@ export function enemyHeight(kind, isBoss = false, scaleHint = null) {
   if (scaleHint) return scaleHint;
   if (isBoss || kind === 'dragon-evolved') return 4.0;
   switch (kind) {
-    case 'big-arm': return 2.85;
-    case 'orc': return 2.7;
-    case 'demon': return 2.75;
-    case 'yeti': return 2.95;
-    case 'zombie-half': return 2.2;
-    default: return 2.45;
+    case 'big-arm': return 3.05;
+    case 'orc': return 2.95;
+    case 'demon': return 3.0;
+    case 'yeti': return 3.15;
+    case 'zombie-half': return 2.45;
+    default: return 2.65;
   }
 }

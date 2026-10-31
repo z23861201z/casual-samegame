@@ -69,12 +69,12 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 2.9, -7.4);
+const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 3.55, -9.4);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.55, 0.92);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.4, 0.96);
 composer.addPass(bloom);
 
 const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.35);
@@ -122,8 +122,14 @@ function setLoad(p, msg) {
 async function loadLevels() {
   const res = await fetch('data/levels.json');
   levels = await res.json();
-  levelIndex = 0;
-  level = levels[0];
+  // Hidden QA deep link: ?level=5 / ?level=10 (1-based).
+  const q = Number(new URLSearchParams(location.search).get('level'));
+  if (Number.isFinite(q) && q >= 1 && q <= levels.length) {
+    levelIndex = q - 1;
+  } else {
+    levelIndex = 0;
+  }
+  level = levels[levelIndex];
 }
 
 async function loadAssets() {
@@ -182,7 +188,7 @@ function makeFallback(key, scale) {
   else if (key === 'sam') color = 0x3d7dff;
   const mesh = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.35, key === 'dragonEvolved' ? 1.4 : 0.9, 4, 8),
-    new THREE.MeshStandardMaterial({ color, emissive: 0x143014, roughness: 0.35, metalness: 0.7 })
+    new THREE.MeshStandardMaterial({ color, emissive: 0x000000, roughness: 0.55, metalness: 0.25 })
   );
   mesh.castShadow = true;
   g.add(mesh);
@@ -391,13 +397,13 @@ function spawnEnemy(ev, i, count) {
   const isBoss = ev.type === 'boss' || kind === 'dragon-evolved' && ev.hp >= 40;
   const { root, mixer, actions } = cloneModel(assetKey, 1);
   const height = enemyHeight(kind, isBoss, ev.scale || null);
-  // Readable wave: slightly larger + spawn further ahead so they walk into camera.
+  // Readable wave: larger + further ahead + slower close so muzzle shot is clear 1–2s.
   const readable = !!ev.readableWave;
-  fitProp(root, readable ? height * 1.12 : height);
+  fitProp(root, readable ? height * 1.32 : height);
   const spread = ev.spread || 2.2;
   const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
-  const zJitter = readable ? (Math.random() - 0.5) * 0.4 : (Math.random() - 0.5) * 1.2;
-  const z = (ev.z || 0) + zJitter + (readable ? 2.5 : 0);
+  const zJitter = readable ? (Math.random() - 0.5) * 0.25 : (Math.random() - 0.5) * 1.2;
+  const z = (ev.z || 0) + zJitter + (readable ? 5.5 : 0);
   root.position.set(x, 0, z);
   root.rotation.y = Math.PI;
   entityGroup.add(root);
@@ -405,7 +411,7 @@ function spawnEnemy(ev, i, count) {
   if (isBoss || assetKey === 'dragonEvolved' || assetKey === 'demon') {
     playAnim(actions, ['Flying_Idle', 'Idle', 'Walk', 'Run']);
   } else {
-    playAnim(actions, readable ? ['Run', 'Walk', 'Idle'] : ['Walk', 'Run', 'Idle']);
+    playAnim(actions, readable ? ['Walk', 'Run', 'Idle'] : ['Walk', 'Run', 'Idle']);
   }
 
   const enemy = {
@@ -415,7 +421,11 @@ function spawnEnemy(ev, i, count) {
     kind, isBoss: !!isBoss || ev.type === 'boss',
     mini: !!ev.mini,
     attackAcc: 0,
-    approachSpeed: readable ? 3.4 : (isBoss || ev.type === 'boss' ? 0.55 : 1.6),
+    readable,
+    showcaseT: 0,
+    showcased: false,
+    // Slow approach keeps readable enemies in the muzzle zone longer.
+    approachSpeed: readable ? 0.85 : (isBoss || ev.type === 'boss' ? 0.55 : 1.6),
     hpBar: null
   };
   if (enemy.isBoss) {
@@ -510,17 +520,19 @@ function syncSquadCount() {
     const s = squad.pop();
     world.remove(s.root);
   }
-  const cols = Math.ceil(Math.sqrt(squad.length));
+  // Fan squad beside lead Sam — avoid deep rearward stack that crops as gun barrels.
   squad.forEach((s, i) => {
     if (i === 0) {
       s.root.position.x = playerX;
       s.root.position.z = state.z;
+      s.root.position.y = 0;
       return;
     }
-    const row = Math.floor(i / cols);
-    const col = i % cols;
-    s.root.position.x = playerX + (col - (cols - 1) / 2) * 0.55;
-    s.root.position.z = state.z - row * 0.55 - 0.4;
+    const side = (i % 2 === 0) ? 1 : -1;
+    const rank = Math.ceil(i / 2);
+    s.root.position.x = playerX + side * Math.min(1.35, 0.48 * rank);
+    s.root.position.z = state.z - Math.min(0.32, 0.1 * rank);
+    s.root.position.y = 0;
   });
 }
 
@@ -561,19 +573,21 @@ function updateFloats(dt) {
   }
 }
 
-/** Only render nearest 1–2 gate pairs ahead (no horizon label stack). */
+/** Strictly nearest 1 gate pair ahead (distance-capped; no vanishing-point stack). */
 function updateGateLabels() {
   const w = innerWidth, h = innerHeight;
   const zNow = state ? state.z : 0;
+  const MAX_AHEAD = 18;
   const pairMap = new Map();
   for (const g of gates) {
     if (g.consumed || g.op === 'finish' || !g.visual?.userData?.labelEl) continue;
-    if (g.z < zNow - 1.5) continue;
+    const dz = g.z - zNow;
+    if (dz < -1.2 || dz > MAX_AHEAD) continue;
     const key = Math.round(g.z * 10) / 10;
     if (!pairMap.has(key)) pairMap.set(key, []);
     pairMap.get(key).push(g);
   }
-  const nearestZs = [...pairMap.keys()].sort((a, b) => a - b).slice(0, 2);
+  const nearestZs = [...pairMap.keys()].sort((a, b) => a - b).slice(0, 1);
   const show = new Set(nearestZs);
 
   for (const g of gates) {
@@ -587,9 +601,9 @@ function updateGateLabels() {
     }
     const worldPos = new THREE.Vector3();
     g.visual.getWorldPosition(worldPos);
-    worldPos.y += 1.35;
+    worldPos.y += 1.55;
     const v = worldPos.project(camera);
-    if (v.z > 1) {
+    if (v.z > 1 || Math.abs(v.x) > 1.15 || Math.abs(v.y) > 1.15) {
       el.style.display = 'none';
       continue;
     }
@@ -598,6 +612,7 @@ function updateGateLabels() {
     el.style.display = 'block';
     el.style.left = `${x}px`;
     el.style.top = `${y}px`;
+    el.style.fontSize = '42px';
     el.style.color = g.visual.userData.labelColor || '#fff';
   }
 }
@@ -779,8 +794,19 @@ function update(dt) {
     }
   }
 
+  // Brief fire soft-pause while a readable wave sits in the muzzle showcase band.
+  let showcaseHold = false;
+  for (const z of zombies) {
+    if (z.dead || !z.readable || z.showcased) continue;
+    const dz = z.z - state.z;
+    if (dz > 4.5 && dz < 14) {
+      z.showcaseT = (z.showcaseT || 0) + dt;
+      if (z.showcaseT >= 1.55) z.showcased = true;
+      else showcaseHold = true;
+    }
+  }
   const fs = fireStats(state.people, state.firepower);
-  fireAcc += dt;
+  fireAcc += showcaseHold ? dt * 0.18 : dt;
   if (fireAcc >= fs.interval) tryFire();
 
   for (let i = bullets.length - 1; i >= 0; i--) {
@@ -807,7 +833,7 @@ function update(dt) {
         if (Math.abs(b.mesh.position.z - z.z) < zr && Math.abs(b.mesh.position.x - z.root.position.x) < xr) {
           const dmg = damageZombie(z, b.damage);
           Object.assign(z, dmg);
-          spawnFloat(`-${b.damage}`, z.root.position.clone().setY(1.8), '#9cffb0');
+          spawnFloat(`-${b.damage}`, z.root.position.clone().setY(1.8), '#d7ffe0');
           updateBossHpBar(z);
           if (z.dead) {
             state.kills += 1;
@@ -903,12 +929,13 @@ function render() {
   update(dt);
 
   shake = Math.max(0, shake - dt * 1.8);
-  const camX = playerX * 0.55 + (Math.random() - 0.5) * shake;
-  // PR2 camera: full Sam body + gun in portrait frame (not gun-row crop).
-  const camY = 2.75 + (Math.random() - 0.5) * shake * 0.3;
-  const camZ = state ? state.z - 7.5 : -7.5;
+  const camX = playerX * 0.35 + (Math.random() - 0.5) * shake;
+  // Third-person: pull back + raise lookAt so full Sam + gun stay mid-frame.
+  const z0 = state ? state.z : 0;
+  const camY = 3.55 + (Math.random() - 0.5) * shake * 0.25;
+  const camZ = z0 - 9.4;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX * 0.25, 1.05, (state ? state.z : 0) + 5.8);
+  camera.lookAt(playerX * 0.2, 1.62, z0 + 3.8);
   camera.updateMatrixWorld();
 
   updateFloats(dt);

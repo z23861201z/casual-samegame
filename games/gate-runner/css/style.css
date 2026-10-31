@@ -74,7 +74,8 @@ html, body { margin: 0; height: 100%; background: #6ea8ff; overflow: hidden; tou
   position: absolute; left: 0; top: 0;
   transform: translate(-50%, -50%);
   font-weight: 900;
-  font-size: clamp(34px, 9vw, 56px);
+  /* Stable size — do not shrink into a vanishing-point stack. */
+  font-size: 42px;
   line-height: 1;
   letter-spacing: -0.02em;
   color: #fff;
