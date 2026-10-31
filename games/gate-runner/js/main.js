@@ -59,12 +59,13 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
-const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 6.2, -8.5);
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 3.4, -6.4);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.7, 0.85);
+// Milder bloom: panels/emissives still glow; number HUD is HTML (not bloomed).
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.55, 0.92);
 composer.addPass(bloom);
 
 // Lights — bright enough for screen recording
@@ -301,64 +302,77 @@ function fitProp(root, targetHeight) {
   root.position.y -= box2.min.y;
 }
 
+function gateLabelText(gate) {
+  return gate.op === 'mul' || gate.op === 'fireMul' ? `×${gate.value}` : `+${gate.value}`;
+}
+
+function gateSideColors(gate, side) {
+  // Clear left/right ad-style palette; mul gates stay purple but still side-tinted.
+  if (gate.op === 'mul' || gate.op === 'fireMul') {
+    return side < 0
+      ? { color: 0xff7a18, emissive: 0x994400, frame: 0xffb347, css: '#ffb347' }
+      : { color: 0x7a3cff, emissive: 0x3a1488, frame: 0xc9a0ff, css: '#e0c4ff' };
+  }
+  return side < 0
+    ? { color: 0xffc933, emissive: 0xaa6600, frame: 0xffe066, css: '#ffe066' }
+    : { color: 0x2f8bff, emissive: 0x0a3a9a, frame: 0x7ec0ff, css: '#b8dcff' };
+}
+
 function makeGateVisual(gate, side) {
   const group = new THREE.Group();
-  const color = gate.op === 'mul' || gate.op === 'fireMul' ? 0xb56bff : (side < 0 ? 0xffd34d : 0x4da3ff);
-  const emissive = gate.op === 'mul' ? 0x5a20a0 : (side < 0 ? 0xaa7700 : 0x1040aa);
+  const colors = gateSideColors(gate, side);
   const w = 2.6 * (gate.widthScale || 1);
+  // Panel keeps emissive glow for Bloom, but intensity stays moderate so it does not wash white.
   const mat = new THREE.MeshStandardMaterial({
-    color, emissive, emissiveIntensity: 1.35,
-    transparent: true, opacity: 0.72, roughness: 0.25, metalness: 0.1, side: THREE.DoubleSide
+    color: colors.color,
+    emissive: colors.emissive,
+    emissiveIntensity: 0.7,
+    transparent: true,
+    opacity: 0.82,
+    roughness: 0.35,
+    metalness: 0.08,
+    side: THREE.DoubleSide
   });
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.4), mat);
   panel.position.y = 1.35;
   group.add(panel);
+  // Colored frame (not white) — left gold / right blue so sides read instantly.
   const frame = new THREE.Mesh(
-    new THREE.BoxGeometry(w + 0.15, 2.55, 0.12),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: color, emissiveIntensity: 0.55, roughness: 0.4 })
+    new THREE.BoxGeometry(w + 0.18, 2.58, 0.14),
+    new THREE.MeshStandardMaterial({
+      color: colors.frame,
+      emissive: colors.emissive,
+      emissiveIntensity: 0.45,
+      roughness: 0.45,
+      metalness: 0.15
+    })
   );
   frame.position.y = 1.35;
   group.add(frame);
 
-  const canvas2 = document.createElement('canvas');
-  canvas2.width = 256; canvas2.height = 256;
-  const ctx = canvas2.getContext('2d');
-  const drawLabel = () => {
-    ctx.clearRect(0, 0, 256, 256);
-    ctx.fillStyle = 'rgba(0,0,0,0)';
-    ctx.clearRect(0, 0, 256, 256);
-    ctx.font = 'bold 120px Segoe UI, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.lineWidth = 10;
-    ctx.strokeStyle = 'rgba(0,0,0,.35)';
-    const label = gate.op === 'mul' || gate.op === 'fireMul' ? `×${gate.value}` : `+${gate.value}`;
-    ctx.strokeText(label, 128, 128);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(label, 128, 128);
-    tex.needsUpdate = true;
-  };
-  const tex = new THREE.CanvasTexture(canvas2);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const labelMesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(w * 0.85, w * 0.85),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false })
-  );
-  labelMesh.position.y = 1.35;
-  labelMesh.position.z = 0.08;
-  group.add(labelMesh);
-  drawLabel();
+  // Number is HTML world-projected (MeshBasic / CSS HUD) — never passes UnrealBloomPass.
+  const labelEl = document.createElement('div');
+  labelEl.className = 'gate-num';
+  labelEl.dataset.side = side < 0 ? 'left' : 'right';
+  labelEl.textContent = gateLabelText(gate);
+  document.getElementById('gateLabels').appendChild(labelEl);
+
+  group.userData.labelEl = labelEl;
+  group.userData.labelColor = colors.css;
   group.userData.redraw = (g) => {
     gate = g;
-    drawLabel();
-    panel.scale.x = (2.6 * (g.widthScale || 1)) / 2.6;
-    frame.scale.x = panel.scale.x;
+    labelEl.textContent = gateLabelText(g);
+    const sx = (2.6 * (g.widthScale || 1)) / 2.6;
+    panel.scale.x = sx;
+    frame.scale.x = sx;
   };
   return group;
 }
 
 function spawnFromLevel() {
   gates.length = 0; zombies.length = 0;
+  const labelHost = document.getElementById('gateLabels');
+  if (labelHost) labelHost.innerHTML = '';
   while (entityGroup.children.length) entityGroup.remove(entityGroup.children[0]);
   for (const ev of level.events) {
     if (ev.type === 'gatePair') {
@@ -373,7 +387,8 @@ function spawnFromLevel() {
       const kind = ev.kind === 'zombie-half' ? 'zombieHalf' : (ev.kind === 'big-arm' ? 'bigArm' : 'zombie');
       for (let i = 0; i < ev.count; i++) {
         const { root, mixer, actions } = cloneModel(kind, 1);
-        fitProp(root, kind === 'bigArm' ? 2.1 : 1.7);
+        // Larger zombies so they read clearly on portrait recordings.
+        fitProp(root, kind === 'bigArm' ? 2.85 : 2.45);
         const x = ((i / Math.max(1, ev.count - 1)) - 0.5) * ev.spread;
         root.position.set(x, 0, ev.z + (Math.random() - 0.5) * 1.2);
         root.rotation.y = Math.PI; // face player (coming from -z camera looking +z-ish)
@@ -492,6 +507,32 @@ function updateFloats(dt) {
       f.el.remove();
       floats.splice(i, 1);
     }
+  }
+}
+
+function updateGateLabels() {
+  const w = innerWidth, h = innerHeight;
+  for (const g of gates) {
+    const el = g.visual?.userData?.labelEl;
+    if (!el) continue;
+    if (!running || g.consumed || g.op === 'finish' || g.visual.visible === false) {
+      el.style.display = 'none';
+      continue;
+    }
+    const world = new THREE.Vector3();
+    g.visual.getWorldPosition(world);
+    world.y += 1.35;
+    const v = world.project(camera);
+    if (v.z > 1) {
+      el.style.display = 'none';
+      continue;
+    }
+    const x = (v.x * 0.5 + 0.5) * w;
+    const y = (-v.y * 0.5 + 0.5) * h;
+    el.style.display = 'block';
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    el.style.color = g.visual.userData.labelColor || '#fff';
   }
 }
 
@@ -708,14 +749,19 @@ function render() {
   mixers.forEach(m => m.update(dt));
 
   update(dt);
-  updateFloats(dt);
 
   shake = Math.max(0, shake - dt * 1.8);
-  const camX = playerX * 0.85 + (Math.random() - 0.5) * shake;
-  const camY = 5.8 + (Math.random() - 0.5) * shake * 0.5;
-  const camZ = state ? state.z - 9.2 : -9.2;
+  const camX = playerX * 0.7 + (Math.random() - 0.5) * shake;
+  // Lower / closer third-person so Sam + rifle stay fully in portrait frame.
+  const camY = 3.35 + (Math.random() - 0.5) * shake * 0.35;
+  const camZ = state ? state.z - 6.2 : -6.2;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX * 0.4, 1.4, (state ? state.z : 0) + 10);
+  camera.lookAt(playerX * 0.35, 1.55, (state ? state.z : 0) + 6.5);
+  camera.updateMatrixWorld();
+
+  // Project HUD after camera settles so +N/×N stick to gate panels.
+  updateFloats(dt);
+  updateGateLabels();
 
   city.position.z = (state ? state.z * 0.35 : 0);
   composer.render();
