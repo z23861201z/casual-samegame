@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { SkeletonUtils } from 'three/addons/utils/SkeletonUtils.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -154,7 +154,7 @@ function cloneModel(key, scale = 1) {
   const gltf = templates[key];
   if (!gltf) return makeFallback(key, scale);
   // SkeletonUtils keeps skinned meshes bound to the clone's bones (plain clone shares skeleton).
-  const root = SkeletonUtils.clone(gltf.scene);
+  const root = cloneSkinned(gltf.scene);
   root.traverse(o => {
     if (!o.isMesh) return;
     o.castShadow = true;
