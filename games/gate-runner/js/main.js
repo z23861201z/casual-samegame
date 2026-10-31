@@ -54,6 +54,7 @@ let targetX = 0;
 let drag = null;
 let fireAcc = 0;
 let shake = 0;
+let bossIFrames = 0; // short invuln after boss bump / breath
 let clock = new THREE.Clock();
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -652,7 +653,8 @@ function spawnEnemy(ev, i, count) {
     appearAfterZ,
     eventZ: ev.z || 0,
     // Slow crawl until showcase pins them in the readable band.
-    approachSpeed: readable ? 0.45 : (isBoss || ev.type === 'boss' ? 0.5 : 1.6),
+    // Mini crawls slower so mid-lane fight stays readable (~0.32).
+    approachSpeed: readable ? 0.45 : (ev.mini ? 0.32 : (isBoss || ev.type === 'boss' ? 0.5 : 1.6)),
     hpBar: null
   };
   if (readable) {
@@ -901,7 +903,7 @@ function resetRun() {
   mixers.length = 0;
   level = levels[levelIndex];
   state = createLevelState(level);
-  playerX = 0; targetX = 0; fireAcc = 0; shake = 0;
+  playerX = 0; targetX = 0; fireAcc = 0; shake = 0; bossIFrames = 0;
   bullets.splice(0).forEach(b => bulletGroup.remove(b.mesh));
   while (bulletGroup.children.length) bulletGroup.remove(bulletGroup.children[0]);
   floats.splice(0).forEach(f => f.el.remove());
@@ -1008,6 +1010,7 @@ function update(dt) {
   if (!running) return;
   state.z += level.runSpeed * dt;
   playerX += (targetX - playerX) * Math.min(1, dt * 12);
+  bossIFrames = Math.max(0, bossIFrames - dt);
 
   for (const z of zombies) {
     if (z.dead) continue;
@@ -1099,10 +1102,12 @@ function update(dt) {
         setTimeout(() => {
           if (!z.dead) playAnim(z.actions, ['Flying_Idle', 'Idle', 'Walk']);
         }, 600);
-        // Boss breath / swipe chip when close
-        if (Math.abs(z.z - state.z) < 4.5) {
-          const loss = z.mini ? 2 : 4;
+        // Boss breath / swipe chip when close (respects player i-frames)
+        if (bossIFrames <= 0 && Math.abs(z.z - state.z) < 4.5) {
+          const loss = z.mini ? 1 : 3;
           state.people = Math.max(0, state.people - loss);
+          bossIFrames = z.mini ? 1.0 : 0.8;
+          z.hitCooldown = bossIFrames;
           shake = Math.max(shake, 0.7);
           spawnFloat(`-${loss}`, z.root.position.clone().setY(2.6), '#ff6b8a');
           syncSquadCount();
@@ -1119,16 +1124,23 @@ function update(dt) {
 
     const hitR = z.isBoss ? 1.6 : 0.9;
     const hitX = z.isBoss ? 1.35 : 0.85;
-    if (Math.abs(z.z - state.z) < hitR && Math.abs(z.root.position.x - playerX) < hitX) {
-      state.people = collideCost(state.people, z.hp);
+    const canHit = z.isBoss
+      ? (bossIFrames <= 0 && z.hitCooldown <= 0)
+      : true;
+    if (canHit && Math.abs(z.z - state.z) < hitR && Math.abs(z.root.position.x - playerX) < hitX) {
+      const before = state.people;
+      state.people = collideCost(state.people, z.hp, { boss: !!z.isBoss, mini: !!z.mini });
+      const lost = Math.max(0, before - state.people);
       shake = Math.max(shake, z.isBoss ? 0.85 : 0.55);
-      spawnFloat(`-${Math.max(1, Math.ceil(z.hp / 2))}`, z.root.position.clone().setY(2), '#ff6b8a');
+      spawnFloat(`-${lost || 1}`, z.root.position.clone().setY(2), '#ff6b8a');
       if (!z.isBoss) {
         z.dead = true;
         z.root.visible = false;
       } else {
-        // Boss contact: knock player slightly and keep boss
+        // Boss contact: knock back, short i-frames so multi-tick cannot wipe
         z.z += 2.2;
+        bossIFrames = z.mini ? 1.0 : 0.85;
+        z.hitCooldown = bossIFrames;
         playAnim(z.actions, ['Punch', 'Headbutt']);
       }
       updateHud();
