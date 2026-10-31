@@ -26,11 +26,13 @@
 
 ## PR1 跟进（PR2 hard-fail 修复）
 
-- [ ] 竖屏第三人称：Sam **全身 + 枪** 入画（Run_Gun 内嵌武器；无独立 rifle glTF）
-  - Cam lock: `position (playerX*0.12, 3.8, state.z-11)` · `lookAt(playerX, 1.1, state.z+1.5)` · near=0.3
-  - Visible squad ≤4, side flanks only; `placeOnGround` after every fit/scale
+- [ ] 竖屏第三人称：Sam **全身** 入画（hide bind-pose Axe/weapons；lead 右手 tiny primitive；无独立 rifle / 无 roadside barrel）
+  - Cam lock: `position (playerX*0.08, 2.35, state.z-6.2)` · `lookAt(playerX, 1.25, state.z+0.35)` · near=0.35 · fov=50
+  - Visible squad ≤3, side flanks only; re-ground `y=groundY` every frame; SkeletonUtils.clone
   - Gate: nearest 1 pair HTML **and** 3D panels; combat floats single-slot (no `-2-2-2`)
-  - readableWave showcase pin `state.z+9.2` ≥1.5s, readable scale ~1.45× then ×1.18 bump
+  - readableWave lazy-activate when event within 14m → pin `state.z+8.5` ≥1.6s, height ~2.2, fire hush + invuln
+  - Boss: mini≤1.8 / finale≤2.4, wingspan≤1.1×h; spawn `max(event.z, state.z+22)`; `?level=10` hide until z>8
+  - Road: street Z overlap + asphalt underlay; no barrel.glb props
 - [ ] 门数字标签只显示最近 **1 对**（远景 3D 面板一并隐藏）
 - [ ] 隐藏 QA：`?level=5` / `?level=10` 可直达 Boss 关；`?debug=1` 显示 cam + 首敌 min.y（及 `window.__grDbg`）
 
@@ -55,5 +57,5 @@
 
 - Sam/怪物朝向依赖 Quaternius 默认 +Z；若某资源朝向相反，需单资源覆写 `rotation.y`
 - 无 WebGL 截图时用 `?debug=1` 核对 grounding；总监录屏仍是最终验收
-- Boss 用 height fit + wingspan cap（≤height×1.55）；readableWave 1.45× 避免开局巨怪糊镜
+- Boss 用 height fit + wingspan cap（≤height×1.1）；readableWave lazy pin 8.5m；Sam 武器网格默认隐藏
 - Headless SwiftShader 材质可能发灰/显瘦，不以无头浏览器截图替代总监验收

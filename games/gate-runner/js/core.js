@@ -104,7 +104,7 @@ export function kindToAssetKey(kind) {
 
 export function enemyHeight(kind, isBoss = false, scaleHint = null) {
   if (scaleHint) return scaleHint;
-  if (isBoss || kind === 'dragon-evolved') return 3.2;
+  if (isBoss || kind === 'dragon-evolved') return 2.4;
   switch (kind) {
     case 'big-arm': return 3.05;
     case 'orc': return 2.95;

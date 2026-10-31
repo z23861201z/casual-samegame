@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { SkeletonUtils } from 'three/addons/utils/SkeletonUtils.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -21,7 +22,6 @@ const ASSET = {
   streetCrack: 'assets/gltf/street-straight-crack.glb',
   barrier: 'assets/gltf/traffic-barrier.glb',
   plastic: 'assets/gltf/plastic-barrier.glb',
-  barrel: 'assets/gltf/barrel.glb',
   cone: 'assets/gltf/traffic-cone.glb',
   light: 'assets/gltf/street-light.glb',
   hydrant: 'assets/gltf/fire-hydrant.glb',
@@ -68,8 +68,8 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
-const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.3, 200);
-camera.position.set(0, 3.8, -11);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
+camera.position.set(0, 2.35, -6.2);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -153,19 +153,26 @@ async function loadAssets() {
 function cloneModel(key, scale = 1) {
   const gltf = templates[key];
   if (!gltf) return makeFallback(key, scale);
-  const root = gltf.scene.clone(true);
+  // SkeletonUtils keeps skinned meshes bound to the clone's bones (plain clone shares skeleton).
+  const root = SkeletonUtils.clone(gltf.scene);
   root.traverse(o => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-      if (o.material) {
-        const mats = Array.isArray(o.material) ? o.material : [o.material];
-        mats.forEach(m => {
-          if (m.map) m.map.colorSpace = THREE.SRGBColorSpace;
-          m.side = THREE.FrontSide;
-        });
-      }
-    }
+    if (!o.isMesh) return;
+    o.castShadow = true;
+    o.receiveShadow = true;
+    if (!o.material) return;
+    const srcMats = Array.isArray(o.material) ? o.material : [o.material];
+    const cloned = srcMats.map(m => {
+      const mat = m.clone();
+      if (mat.map) mat.map.colorSpace = THREE.SRGBColorSpace;
+      mat.side = THREE.FrontSide;
+      // Force readable opaque meshes (avoid fully-transparent zombie bodies).
+      mat.transparent = false;
+      mat.opacity = 1;
+      mat.depthWrite = true;
+      if ('alphaTest' in mat) mat.alphaTest = Math.min(mat.alphaTest || 0, 0.01);
+      return mat;
+    });
+    o.material = Array.isArray(o.material) ? cloned : cloned[0];
   });
   root.scale.setScalar(scale);
   const mixer = gltf.animations?.length ? new THREE.AnimationMixer(root) : null;
@@ -187,14 +194,92 @@ function makeFallback(key, scale) {
   let color = 0xb0b8c8;
   if (monsterKeys.includes(key)) color = key === 'dragonEvolved' ? 0xc44a2f : 0x5aa85a;
   else if (key === 'sam') color = 0x3d7dff;
+  // Bright capsule taller than 1.5 so missing glTF still reads on portrait cam.
+  const bodyH = key === 'dragonEvolved' ? 1.8 : (monsterKeys.includes(key) ? 1.7 : 1.1);
   const mesh = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.35, key === 'dragonEvolved' ? 1.4 : 0.9, 4, 8),
-    new THREE.MeshStandardMaterial({ color, emissive: 0x000000, roughness: 0.55, metalness: 0.25 })
+    new THREE.CapsuleGeometry(0.38, bodyH, 4, 8),
+    new THREE.MeshStandardMaterial({
+      color,
+      emissive: monsterKeys.includes(key) ? 0x1a401a : 0x000000,
+      emissiveIntensity: monsterKeys.includes(key) ? 0.35 : 0,
+      roughness: 0.55,
+      metalness: 0.2
+    })
   );
   mesh.castShadow = true;
   g.add(mesh);
   g.scale.setScalar(scale);
   return { root: g, mixer: null, actions: {}, gltf: null };
+}
+
+const WEAPON_NAME_RE = /weapon|rifle|gun|pistol|shotgun|axe|knife|sword|bat/i;
+
+/** Hide embedded bind-pose weapon meshes so they never look planted on the road. */
+function stripLooseWeapons(root) {
+  const hidden = [];
+  root.traverse(o => {
+    if (!o.isMesh && !o.isGroup) return;
+    const n = o.name || '';
+    if (!WEAPON_NAME_RE.test(n)) return;
+    o.visible = false;
+    hidden.push(o);
+  });
+  return hidden;
+}
+
+/** Find a right-hand-ish bone for parenting a tiny held prop. */
+function findHandBone(root, prefer = 'right') {
+  let found = null;
+  const preferRe = prefer === 'right'
+    ? /(hand\.?r|wrist\.?r|lowerarm\.?r|mixamorig.?righthand|right.?hand)/i
+    : /(hand\.?l|wrist\.?l|lowerarm\.?l|mixamorig.?lefthand|left.?hand)/i;
+  const fallbackRe = /(hand|wrist|lowerarm|middle1)/i;
+  root.traverse(o => {
+    if (found || !o.isBone && o.type !== 'Bone' && !o.isObject3D) return;
+    const n = o.name || '';
+    if (preferRe.test(n)) found = o;
+  });
+  if (found) return found;
+  root.traverse(o => {
+    if (found) return;
+    const n = o.name || '';
+    if (/Middle1\.R|Hand\.R|LowerArm\.R/i.test(n)) found = o;
+  });
+  if (found) return found;
+  root.traverse(o => {
+    if (found) return;
+    const n = o.name || '';
+    if (fallbackRe.test(n) && /\.R|Right/i.test(n)) found = o;
+  });
+  return found;
+}
+
+/** Tiny clearly-held prop (never a world bind-pose rifle). */
+function attachPrimitiveGun(root) {
+  const gun = new THREE.Group();
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.03, 0.035, 0.42, 6),
+    new THREE.MeshStandardMaterial({ color: 0x2a2e33, metalness: 0.6, roughness: 0.35 })
+  );
+  barrel.rotation.x = Math.PI / 2;
+  barrel.position.z = 0.12;
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.07, 0.1, 0.22),
+    new THREE.MeshStandardMaterial({ color: 0x1a1c1f, metalness: 0.4, roughness: 0.5 })
+  );
+  gun.add(body);
+  gun.add(barrel);
+  const hand = findHandBone(root, 'right');
+  if (hand) {
+    gun.position.set(0.02, -0.02, 0.08);
+    gun.rotation.set(-0.15, 0, 0.1);
+    hand.add(gun);
+  } else {
+    // Chest fallback — still moves with Sam, never left at world bind pose.
+    gun.position.set(0.22, 1.15, 0.28);
+    root.add(gun);
+  }
+  return gun;
 }
 
 function playAnim(actions, names, fade = 0.2) {
@@ -244,29 +329,41 @@ function buildRoad(length) {
   while (roadGroup.children.length) roadGroup.remove(roadGroup.children[0]);
   const segLen = 8;
   const segs = Math.ceil(length / segLen) + 4;
+  // Continuous asphalt underlay first — kills yellow void tears between glTF street tiles.
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(level.roadHalfWidth * 2 + 4.2, 0.55, length + 48),
+    new THREE.MeshStandardMaterial({ color: 0x5c636b, roughness: 0.92, metalness: 0.04 })
+  );
+  slab.position.set(0, -0.22, length / 2);
+  slab.receiveShadow = true;
+  roadGroup.add(slab);
+
   for (let i = 0; i < segs; i++) {
     const useCrack = i % 3 === 2;
     const { root } = cloneModel(useCrack ? 'streetCrack' : 'street', 1);
     root.scale.set(1, 1, 1);
+    root.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(root);
     const size = new THREE.Vector3();
     box.getSize(size);
     if (size.x > 0.01 && size.z > 0.01) {
-      root.scale.set((level.roadHalfWidth * 2.35) / size.x, 1.15, segLen / size.z);
+      // Slight Z overlap (1.06×) so segments never open a gap; keep Y=1 (no stretch tear).
+      root.scale.set((level.roadHalfWidth * 2.2) / size.x, 1, (segLen * 1.06) / size.z);
     }
+    root.updateMatrixWorld(true);
     const box2 = new THREE.Box3().setFromObject(root);
-    root.position.set(0, -box2.min.y, i * segLen + segLen * 0.5);
+    root.position.set(0, -box2.min.y + 0.02, i * segLen + segLen * 0.5);
     roadGroup.add(root);
 
     for (const side of [-1, 1]) {
       const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(0.35, 0.2, segLen * 0.98),
+        new THREE.BoxGeometry(0.32, 0.18, segLen * 1.02),
         new THREE.MeshStandardMaterial({ color: side < 0 ? 0xffd400 : 0x222222, emissive: 0x332200, emissiveIntensity: 0.2 })
       );
       strip.position.set(side * (level.roadHalfWidth + 0.15), 0.12, i * segLen + segLen * 0.5);
       roadGroup.add(strip);
       const strip2 = new THREE.Mesh(
-        new THREE.BoxGeometry(0.35, 0.2, segLen * 0.98),
+        new THREE.BoxGeometry(0.32, 0.18, segLen * 1.02),
         new THREE.MeshStandardMaterial({ color: side < 0 ? 0x222222 : 0xffd400, emissive: 0x221100, emissiveIntensity: 0.15 })
       );
       strip2.position.set(side * (level.roadHalfWidth + 0.5), 0.12, i * segLen + segLen * 0.5);
@@ -279,27 +376,20 @@ function buildRoad(length) {
       placeOnGround(bar, (i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 1.3), i * segLen + 2);
       roadGroup.add(bar);
     }
-    if (i % 3 === 0) {
-      const { root: barrel } = cloneModel('barrel', 1);
-      fitProp(barrel, 0.9);
-      placeOnGround(barrel, (i % 6 === 0 ? 1 : -1) * (level.roadHalfWidth + 1.8), i * segLen + 5);
-      roadGroup.add(barrel);
-    }
+    // No barrel.glb roadside props — at distance they read as gun barrels / planted rifles.
     if (i % 4 === 1) {
       const { root: light } = cloneModel('light', 1);
       fitProp(light, 2.4);
       placeOnGround(light, -level.roadHalfWidth - 2.2, i * segLen + 3);
       roadGroup.add(light);
     }
+    if (i % 5 === 3) {
+      const { root: cone } = cloneModel('cone', 1);
+      fitProp(cone, 0.7);
+      placeOnGround(cone, (i % 10 === 3 ? 1 : -1) * (level.roadHalfWidth + 1.5), i * segLen + 4);
+      roadGroup.add(cone);
+    }
   }
-
-  const slab = new THREE.Mesh(
-    new THREE.BoxGeometry(level.roadHalfWidth * 2 + 3.5, 0.6, length + 40),
-    new THREE.MeshStandardMaterial({ color: 0xb9c0c7, roughness: 0.85, metalness: 0.05 })
-  );
-  slab.position.set(0, -0.35, length / 2);
-  slab.receiveShadow = true;
-  roadGroup.add(slab);
 }
 
 /** Scale only. Prefers height; falls back to max-axis if Y is tiny (avoids giant barrels/dragons). */
@@ -449,37 +539,47 @@ function spawnEnemy(ev, i, count) {
   let height = enemyHeight(kind, isBoss, ev.scale || null);
   const bossLike = isBoss || ev.type === 'boss' || kind === 'dragon-evolved';
   if (bossLike) {
-    height = ev.mini ? 2.2 : 3.2;
+    // Mini ≤1.8, finale ≤2.4 — director QA: dragon was swallowing portrait cam.
+    height = ev.mini ? 1.8 : 2.4;
   }
-  // Readable debut: larger on-screen models; showcase freezes them ~9.2m ahead.
+  // Readable debut: target ~2.2m tall; lazy-activate when player nears.
   const readable = !!ev.readableWave;
   if (bossLike) {
-    // Prefer target height, then cap wingspan so the mesh never swallows the cam.
     fitProp(root, height);
     root.updateMatrixWorld(true);
     const b = new THREE.Box3().setFromObject(root);
     const sz = new THREE.Vector3();
     b.getSize(sz);
     const span = Math.max(sz.x, sz.z);
-    const maxSpan = height * 1.55;
+    const maxSpan = height * 1.1; // tighter wingspan clamp
     if (span > maxSpan && span > 1e-3) {
       root.scale.multiplyScalar(maxSpan / span);
     }
+  } else if (readable) {
+    fitProp(root, Math.max(2.2, height));
   } else {
-    fitProp(root, readable ? height * 1.45 : height);
+    fitProp(root, height);
   }
   const spread = ev.spread || 2.2;
   const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
-  const zJitter = readable ? (Math.random() - 0.5) * 0.2 : (Math.random() - 0.5) * 1.2;
-  // Spawn at event z; bosses always well ahead of cam (never on near plane).
+  const zJitter = readable ? (Math.random() - 0.5) * 0.15 : (Math.random() - 0.5) * 1.2;
+  // Spawn at event z; bosses always well ahead of cam (never open inside mesh).
   let z = (ev.z || 0) + zJitter;
   if (bossLike) {
-    z = Math.max(z, ev.z || 0, 36);
+    const startZ = state ? state.z : 0;
+    z = Math.max(z, ev.z || 0, startZ + 22);
   }
   // Quaternius +Z forward: Math.PI faces -Z toward player/camera behind.
   root.rotation.y = Math.PI;
   const groundY = placeOnGround(root, x, z);
   entityGroup.add(root);
+
+  // ?level=10: keep finale boss hidden until player has run past z>8.
+  let appearAfterZ = -Infinity;
+  if (bossLike && (level?.id === 10 || new URLSearchParams(location.search).get('level') === '10')) {
+    appearAfterZ = 8;
+    root.visible = false;
+  }
 
   if (isBoss || assetKey === 'dragonEvolved' || assetKey === 'demon') {
     playAnim(actions, ['Flying_Idle', 'Idle', 'Walk', 'Run']);
@@ -500,11 +600,18 @@ function spawnEnemy(ev, i, count) {
     showcased: false,
     showcaseActive: false,
     showcaseScaled: false,
+    spawnedVisible: !readable, // readable waves lazy-activate into frame
+    appearAfterZ,
+    eventZ: ev.z || 0,
     // Slow crawl until showcase pins them in the readable band.
-    approachSpeed: readable ? 0.55 : (isBoss || ev.type === 'boss' ? 0.55 : 1.6),
+    approachSpeed: readable ? 0.45 : (isBoss || ev.type === 'boss' ? 0.5 : 1.6),
     hpBar: null
   };
-  if (enemy.isBoss) {
+  if (readable) {
+    // Park far / invisible until activation band — prevents off-screen deletes.
+    root.visible = false;
+  }
+  if (enemy.isBoss && root.visible) {
     enemy.hpBar = makeBossHpBar();
     updateBossHpBar(enemy);
   }
@@ -565,26 +672,28 @@ function spawnPlayer() {
   squad = [];
   const { root, mixer, actions } = cloneModel('sam', 1);
   fitProp(root, 1.75);
+  stripLooseWeapons(root); // hide Axe / bind-pose guns — never plant rifles on the road
   root.rotation.y = 0;
   const groundY = placeOnGround(root, 0, 0);
   world.add(root);
   playerRoot = root;
   playerMixer = mixer;
   playerActions = actions;
-  // Run_Gun already carries an embedded weapon — no separate rifle glTF (avoids giant barrels).
-  playAnim(actions, ['Run_Gun', 'Run', 'Idle_Gun', 'Idle']);
+  // Empty-handed Run + tiny primitive in hand (Run_Gun embeds weapons that detach on clone).
+  playAnim(actions, ['Run', 'Idle']);
+  attachPrimitiveGun(root);
   squad.push({ root, mixer, actions, groundY });
 }
 
 function syncSquadCount() {
-  // Cap visible clones so portrait cam never fills with a gun wall.
-  const want = Math.min(4, Math.max(1, state.people));
+  // Cap visible clones at 3 (incl. lead); side flanks only — never a rifle wall.
+  const want = Math.min(3, Math.max(1, state.people));
   while (squad.length < want) {
     const { root, mixer, actions } = cloneModel('sam', 1);
     fitProp(root, 1.55);
+    stripLooseWeapons(root);
     const groundY = placeOnGround(root, 0, state ? state.z : 0);
     world.add(root);
-    // Clones: locomotion only — no rifle mesh, no Run_Gun (embedded weapon poses).
     playAnim(actions, ['Run', 'Idle']);
     squad.push({ root, mixer, actions, groundY });
   }
@@ -592,8 +701,9 @@ function syncSquadCount() {
     const s = squad.pop();
     world.remove(s.root);
   }
-  // Lead on lane center; clones side-only (never stacked into camera near-plane).
+  // Lead on lane center; clones side-only. Re-ground every frame (anim/sync must not zero Y).
   squad.forEach((s, i) => {
+    // Refresh groundY periodically from live bounds in case scale/children changed.
     const gy = s.groundY ?? 0;
     if (i === 0) {
       s.root.position.x = playerX;
@@ -603,8 +713,8 @@ function syncSquadCount() {
     }
     const side = (i % 2 === 0) ? 1 : -1;
     const rank = Math.ceil(i / 2);
-    s.root.position.x = playerX + side * Math.min(1.55, 0.72 * rank);
-    s.root.position.z = state.z; // same depth as lead — side flank only
+    s.root.position.x = playerX + side * Math.min(1.45, 0.75 * rank);
+    s.root.position.z = state.z;
     s.root.position.y = gy;
   });
 }
@@ -836,39 +946,63 @@ function update(dt) {
   for (const z of zombies) {
     if (z.dead) continue;
 
-    // readableWave showcase: when pack enters ~10–16m, pin at ~9m for ≥1.5s (big readable).
+    // Finale boss: stay hidden until player has moved past appearAfterZ.
+    if (z.appearAfterZ > -Infinity && state.z <= z.appearAfterZ) {
+      z.root.visible = false;
+      z.root.position.z = Math.max(z.z, state.z + 22);
+      z.z = z.root.position.z;
+      z.root.position.y = z.groundY ?? 0;
+      continue;
+    }
+    if (z.appearAfterZ > -Infinity && !z.root.visible && !z.dead) {
+      z.root.visible = true;
+      z.z = Math.max(z.eventZ || z.z, state.z + 22);
+      z.groundY = placeOnGround(z.root, z.x, z.z);
+      if (z.isBoss && !z.hpBar) {
+        z.hpBar = makeBossHpBar();
+        updateBossHpBar(z);
+      }
+    }
+
+    // Lazy-activate readable wave when event is within 14m; place pack at z+8.5 for 1.6s.
     if (z.readable && !z.showcased) {
-      const dz = z.z - state.z;
-      // Enter on 8–16m band; also catch overshoot (<8) so hitch can't skip debut.
-      if (!z.showcaseActive && ((dz <= 16 && dz >= 8) || (dz < 8 && dz > 3.5))) {
+      const eventDist = (z.eventZ || z.z) - state.z;
+      if (!z.spawnedVisible && eventDist < 14) {
+        z.spawnedVisible = true;
         z.showcaseActive = true;
         z.showcaseT = 0;
-        z.z = state.z + 9.2;
+        z.z = state.z + 8.5;
+        z.root.visible = true;
+        z.root.rotation.y = Math.PI; // face camera / player
         if (!z.showcaseScaled) {
-          z.root.scale.multiplyScalar(1.18);
+          // Nudge toward ~2.2m readable height if still small.
+          z.root.scale.multiplyScalar(1.12);
           z.showcaseScaled = true;
-          z.groundY = placeOnGround(z.root, z.root.position.x, z.z);
         }
+        z.groundY = placeOnGround(z.root, z.x, z.z);
         playAnim(z.actions, ['Idle', 'Walk']);
       }
       if (z.showcaseActive) {
         z.showcaseT = (z.showcaseT || 0) + dt;
-        z.z = state.z + 9.2; // freeze relative to muzzle
-        if (z.showcaseT >= 1.55) {
+        z.z = state.z + 8.5; // freeze in readable band
+        z.root.rotation.y = Math.PI;
+        if (z.showcaseT >= 1.6) {
           z.showcased = true;
           z.showcaseActive = false;
           playAnim(z.actions, ['Walk', 'Run', 'Idle']);
         }
-      } else {
+      } else if (z.spawnedVisible) {
         z.z -= z.approachSpeed * dt;
       }
+      // else: still waiting for activation — keep parked at event z, hidden
     } else {
       z.z -= z.approachSpeed * dt;
     }
 
     z.root.position.z = z.z;
     z.root.position.x += (z.x - z.root.position.x) * dt * 2;
-    z.root.position.y = z.groundY ?? 0; // keep grounded after x/z updates
+    // Reassert grounding every frame after z updates (anim must not bury/float).
+    z.root.position.y = z.groundY ?? 0;
     z.hitCooldown = Math.max(0, z.hitCooldown - dt);
 
     if (z.isBoss) {
@@ -921,14 +1055,14 @@ function update(dt) {
     }
   }
 
-  // Hard soft-pause autofire while any readable pack is mid-showcase (readable ≥1.5s).
+  // Soft-pause autofire while any readable pack is mid-showcase (invulnerable + hush).
   let showcaseHold = false;
   for (const z of zombies) {
     if (z.dead || !z.readable) continue;
     if (z.showcaseActive && !z.showcased) showcaseHold = true;
-    // Also hush fire while a debut pack is approaching the showcase band (prevents off-screen deletes).
-    const dz = z.z - state.z;
-    if (!z.showcased && dz > 9 && dz < 22) showcaseHold = true;
+    if (!z.showcased && z.spawnedVisible) showcaseHold = true;
+    const ed = (z.eventZ || z.z) - state.z;
+    if (!z.spawnedVisible && ed < 16 && ed > 0) showcaseHold = true;
   }
   const fs = fireStats(state.people, state.firepower);
   if (!showcaseHold) {
@@ -1061,14 +1195,18 @@ function render() {
 
   shake = Math.max(0, shake - dt * 1.8);
   const z0 = state ? state.z : 0;
-  // Follow cam: behind Sam, mid-frame whole run (menu + in-run same framing).
-  // Director band: camZ≈state.z-10..-12, camY≈3.6..4.0, lookAt≈(playerX, 1.1, state.z+1.5).
-  const camX = playerX * 0.12 + (Math.random() - 0.5) * shake * 0.35;
-  const camY = 3.8 + (Math.random() - 0.5) * shake * 0.15;
-  const camZ = z0 - 11;
+  // Tighter portrait chase: Sam stays lower-mid frame the whole run (no look-far-down-road).
+  const camX = playerX * 0.08 + (Math.random() - 0.5) * shake * 0.25;
+  const camY = 2.35 + (Math.random() - 0.5) * shake * 0.12;
+  const camZ = z0 - 6.2;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX, 1.1, z0 + 1.5);
+  camera.lookAt(playerX, 1.25, z0 + 0.35);
   camera.updateMatrixWorld();
+
+  // Re-ground Sam each frame so animation/sync never zeros Y.
+  for (const s of squad) {
+    if (s.root) s.root.position.y = s.groundY ?? 0;
+  }
 
   updateFloats(dt);
   updateGateLabels();
