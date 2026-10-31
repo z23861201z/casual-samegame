@@ -26,7 +26,7 @@
 复跑：
 
 ```bash
-cd casual-samegame && node tests/core-test.js
+cd games/samegame && node tests/core-test.js
 ```
 
 ## 2. 关卡模拟通关路径（描述）
