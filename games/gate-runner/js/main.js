@@ -377,8 +377,8 @@ function buildRoad(length) {
   roadGroup.add(slab);
 
   for (let i = 0; i < segs; i++) {
-    const useCrack = i % 3 === 2;
-    const { root } = cloneModel(useCrack ? 'streetCrack' : 'street', 1);
+    // Street only (no streetCrack) — crack tiles caused yellow tear flash / gaps on showcase.
+    const { root } = cloneModel('street', 1);
     root.scale.set(1, 1, 1);
     root.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(root);
@@ -577,8 +577,8 @@ function spawnEnemy(ev, i, count) {
   let height = enemyHeight(kind, isBoss, ev.scale || null);
   const bossLike = isBoss || ev.type === 'boss' || kind === 'dragon-evolved';
   if (bossLike) {
-    // Mini ≤1.8, finale ≤2.2 — keep dragon out of near plane / portrait swallow.
-    height = ev.mini ? 1.8 : 2.2;
+    // Mini ~2.6 fills mid-lane; finale ~2.2–2.4 — readable, not speck or face-plant.
+    height = ev.mini ? 2.6 : 2.3;
   }
   // Readable debut: target ~2.2m tall; lazy-activate when player nears.
   const readable = !!ev.readableWave;
@@ -589,7 +589,7 @@ function spawnEnemy(ev, i, count) {
     const sz = new THREE.Vector3();
     b.getSize(sz);
     const span = Math.max(sz.x, sz.z);
-    const maxSpan = height * 1.1; // tighter wingspan clamp
+    const maxSpan = height * (ev.mini ? 1.35 : 1.15); // mini wings read; still one model
     if (span > maxSpan && span > 1e-3) {
       root.scale.multiplyScalar(maxSpan / span);
     }
@@ -601,22 +601,32 @@ function spawnEnemy(ev, i, count) {
   const spread = ev.spread || 2.2;
   const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
   const zJitter = readable ? (Math.random() - 0.5) * 0.15 : (Math.random() - 0.5) * 1.2;
-  // Spawn at event z; bosses always ≥25m ahead of cam (never open inside mesh).
+  // Spawn at event z; bosses park mid gun-range (mini) or ≥25m ahead (finale).
   let z = (ev.z || 0) + zJitter;
   if (bossLike) {
     const startZ = state ? state.z : 0;
-    z = Math.max(z, ev.z || 0, startZ + 25);
+    if (ev.mini) {
+      z = Math.max(ev.z || 0, startZ + 18);
+      z = Math.min(z, startZ + 28);
+    } else {
+      z = Math.max(z, ev.z || 0, startZ + 25);
+    }
   }
   // Quaternius +Z forward: Math.PI faces -Z toward player/camera behind.
   root.rotation.y = Math.PI;
   const groundY = placeOnGround(root, x, z);
   entityGroup.add(root);
 
-  // Finale: briefly hide until player leaves menu start, then park ≥25m ahead on lane.
+  // Mini (L5) + finale (L10): hide until run starts so menu never shows wrong mesh.
   let appearAfterZ = -Infinity;
-  if (bossLike && (level?.id === 10 || new URLSearchParams(location.search).get('level') === '10')) {
-    appearAfterZ = 1;
-    root.visible = false;
+  {
+    const qLevel = new URLSearchParams(location.search).get('level');
+    const isL10 = level?.id === 10 || qLevel === '10';
+    const isL5 = level?.id === 5 || qLevel === '5';
+    if (bossLike && (ev.mini || isL10 || isL5)) {
+      appearAfterZ = 1;
+      root.visible = false;
+    }
   }
 
   if (isBoss || assetKey === 'dragonEvolved' || assetKey === 'demon') {
@@ -1002,18 +1012,25 @@ function update(dt) {
   for (const z of zombies) {
     if (z.dead) continue;
 
-    // Finale boss: stay hidden until player has moved past appearAfterZ.
+    // Boss: stay hidden until player has moved past appearAfterZ.
     if (z.appearAfterZ > -Infinity && state.z <= z.appearAfterZ) {
       z.root.visible = false;
-      z.root.position.z = Math.max(z.z, state.z + 25);
+      const holdAhead = z.mini ? 22 : 25;
+      z.root.position.z = Math.max(z.z, state.z + holdAhead);
       z.z = z.root.position.z;
       z.root.position.y = z.groundY ?? 0;
       continue;
     }
     if (z.appearAfterZ > -Infinity && !z.root.visible && !z.dead) {
       z.root.visible = true;
-      // Park ≥25m ahead on lane so finale reads within first ~15s (not fogged at 120m).
-      z.z = Math.max(state.z + 25, Math.min(z.eventZ || (state.z + 25), state.z + 55));
+      if (z.mini) {
+        // Mid gun-range: ~18–26 ahead, hard cap ~28 — one clear dragon, not a speck.
+        const desired = Math.max(state.z + 18, Math.min(z.eventZ || (state.z + 22), state.z + 26));
+        z.z = Math.min(desired, state.z + 28);
+      } else {
+        // Finale: park ≥25m ahead so it reads within first ~15s (not fogged at 120m).
+        z.z = Math.max(state.z + 25, Math.min(z.eventZ || (state.z + 25), state.z + 55));
+      }
       z.groundY = placeOnGround(z.root, z.x, z.z);
     }
 

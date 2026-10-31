@@ -92,11 +92,11 @@
     "stars": { "twoPeople": 10, "threePeople": 16, "threeFirepower": 3 },
     "events": [
       { "z": 14, "type": "gatePair", "left": { "op": "add", "value": 6, "hp": 12 }, "right": { "op": "mul", "value": 2, "hp": 16 } },
-      { "z": 28, "type": "zombies", "count": 3, "hp": 5, "kind": "demon", "spread": 2.3, "readableWave": true },
-      { "z": 42, "type": "gatePair", "left": { "op": "fire", "value": 1, "hp": 12 }, "right": { "op": "add", "value": 8, "hp": 14 } },
-      { "z": 56, "type": "zombies", "count": 4, "hp": 6, "kind": "demon", "spread": 2.5 },
+      { "z": 28, "type": "zombies", "count": 3, "hp": 5, "kind": "zombie", "spread": 2.3, "readableWave": true },
+      { "z": 42, "type": "boss", "kind": "dragon-evolved", "hp": 45, "scale": 2.8, "mini": true },
+      { "z": 56, "type": "zombies", "count": 4, "hp": 6, "kind": "orc", "spread": 2.5 },
       { "z": 70, "type": "gatePair", "left": { "op": "mul", "value": 2, "hp": 18 }, "right": { "op": "fire", "value": 2, "hp": 16 } },
-      { "z": 88, "type": "boss", "kind": "dragon-evolved", "hp": 45, "scale": 2.2, "mini": true },
+      { "z": 88, "type": "gatePair", "left": { "op": "fire", "value": 1, "hp": 12 }, "right": { "op": "add", "value": 8, "hp": 14 } },
       { "z": 108, "type": "gatePair", "left": { "op": "add", "value": 10, "hp": 14 }, "right": { "op": "add", "value": 4, "hp": 10 } },
       { "z": 120, "type": "finish", "needPeople": 8 }
     ]
