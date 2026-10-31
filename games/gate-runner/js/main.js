@@ -70,7 +70,7 @@ scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
 const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 3.55, -9.4);
+camera.position.set(0, 2.6, -6.0);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -397,13 +397,14 @@ function spawnEnemy(ev, i, count) {
   const isBoss = ev.type === 'boss' || kind === 'dragon-evolved' && ev.hp >= 40;
   const { root, mixer, actions } = cloneModel(assetKey, 1);
   const height = enemyHeight(kind, isBoss, ev.scale || null);
-  // Readable wave: larger + further ahead + slower close so muzzle shot is clear 1–2s.
+  // Readable debut: large on-screen models; showcase logic freezes them ~9m ahead.
   const readable = !!ev.readableWave;
-  fitProp(root, readable ? height * 1.32 : height);
+  fitProp(root, readable ? height * 1.55 : height);
   const spread = ev.spread || 2.2;
   const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
-  const zJitter = readable ? (Math.random() - 0.5) * 0.25 : (Math.random() - 0.5) * 1.2;
-  const z = (ev.z || 0) + zJitter + (readable ? 5.5 : 0);
+  const zJitter = readable ? (Math.random() - 0.5) * 0.2 : (Math.random() - 0.5) * 1.2;
+  // Spawn at event z (no far offset) so autofire cannot delete them off-screen first.
+  const z = (ev.z || 0) + zJitter;
   root.position.set(x, 0, z);
   root.rotation.y = Math.PI;
   entityGroup.add(root);
@@ -411,7 +412,7 @@ function spawnEnemy(ev, i, count) {
   if (isBoss || assetKey === 'dragonEvolved' || assetKey === 'demon') {
     playAnim(actions, ['Flying_Idle', 'Idle', 'Walk', 'Run']);
   } else {
-    playAnim(actions, readable ? ['Walk', 'Run', 'Idle'] : ['Walk', 'Run', 'Idle']);
+    playAnim(actions, ['Walk', 'Run', 'Idle']);
   }
 
   const enemy = {
@@ -424,8 +425,10 @@ function spawnEnemy(ev, i, count) {
     readable,
     showcaseT: 0,
     showcased: false,
-    // Slow approach keeps readable enemies in the muzzle zone longer.
-    approachSpeed: readable ? 0.85 : (isBoss || ev.type === 'boss' ? 0.55 : 1.6),
+    showcaseActive: false,
+    showcaseScaled: false,
+    // Slow crawl until showcase pins them in the readable band.
+    approachSpeed: readable ? 0.55 : (isBoss || ev.type === 'boss' ? 0.55 : 1.6),
     hpBar: null
   };
   if (enemy.isBoss) {
@@ -498,29 +501,32 @@ function spawnPlayer() {
   playAnim(actions, ['Run_Gun', 'Run', 'Idle_Gun', 'Idle']);
   squad.push({ root, mixer, actions });
 
+  // Compact lead-only prop; clones never get rifles (avoids near-plane gun wall).
   if (templates.rifle) {
     const { root: gun } = cloneModel('rifle', 1);
-    fitProp(gun, 0.55);
-    gun.position.set(0.25, 0.95, 0.35);
+    fitProp(gun, 0.32);
+    gun.position.set(0.22, 0.92, 0.28);
     gun.rotation.y = Math.PI;
     root.add(gun);
   }
 }
 
 function syncSquadCount() {
-  const want = Math.min(9, state.people);
+  // Cap visible clones so portrait cam never fills with a gun wall.
+  const want = Math.min(4, Math.max(1, state.people));
   while (squad.length < want) {
     const { root, mixer, actions } = cloneModel('sam', 1);
     fitProp(root, 1.55);
     world.add(root);
-    playAnim(actions, ['Run_Gun', 'Run']);
+    // Clones: locomotion only — no rifle mesh, no Run_Gun (embedded weapon poses).
+    playAnim(actions, ['Run', 'Idle']);
     squad.push({ root, mixer, actions });
   }
   while (squad.length > want) {
     const s = squad.pop();
     world.remove(s.root);
   }
-  // Fan squad beside lead Sam — avoid deep rearward stack that crops as gun barrels.
+  // Lead on lane center; clones side-only (never stacked into camera near-plane).
   squad.forEach((s, i) => {
     if (i === 0) {
       s.root.position.x = playerX;
@@ -530,8 +536,8 @@ function syncSquadCount() {
     }
     const side = (i % 2 === 0) ? 1 : -1;
     const rank = Math.ceil(i / 2);
-    s.root.position.x = playerX + side * Math.min(1.35, 0.48 * rank);
-    s.root.position.z = state.z - Math.min(0.32, 0.1 * rank);
+    s.root.position.x = playerX + side * Math.min(1.55, 0.72 * rank);
+    s.root.position.z = state.z; // same depth as lead — side flank only
     s.root.position.y = 0;
   });
 }
@@ -546,12 +552,24 @@ function spawnBullet(origin, dir, damage) {
   bullets.push({ mesh, dir: dir.clone().normalize(), speed: 42, damage, life: 1.2 });
 }
 
-function spawnFloat(text, pos, color = '#fff') {
+function spawnFloat(text, pos, color = '#fff', opts = {}) {
+  // Gate reward floats must never stack into a second "gate number" string.
+  if (opts.gate) {
+    for (let i = floats.length - 1; i >= 0; i--) {
+      if (floats[i].gate) {
+        floats[i].el.remove();
+        floats.splice(i, 1);
+      }
+    }
+  } else if (floats.length >= 3) {
+    const old = floats.shift();
+    old.el.remove();
+  }
   const el = document.createElement('div');
   el.textContent = text;
   el.style.cssText = `position:absolute;left:0;top:0;transform:translate(-50%,-50%);color:${color};font-weight:800;font-size:20px;text-shadow:0 2px 8px rgba(0,0,0,.45);pointer-events:none;`;
   document.getElementById('hud').appendChild(el);
-  floats.push({ el, pos: pos.clone(), life: 0.8, vy: 1.2 });
+  floats.push({ el, pos: pos.clone(), life: opts.gate ? 0.55 : 0.8, vy: 1.2, gate: !!opts.gate });
 }
 
 function updateFloats(dt) {
@@ -739,7 +757,36 @@ function update(dt) {
 
   for (const z of zombies) {
     if (z.dead) continue;
-    z.z -= z.approachSpeed * dt;
+
+    // readableWave showcase: when pack enters ~10–16m, pin at ~9m for ≥1.5s (big readable).
+    if (z.readable && !z.showcased) {
+      const dz = z.z - state.z;
+      // Enter on 8–16m band; also catch overshoot (<8) so hitch can't skip debut.
+      if (!z.showcaseActive && ((dz <= 16 && dz >= 8) || (dz < 8 && dz > 3.5))) {
+        z.showcaseActive = true;
+        z.showcaseT = 0;
+        z.z = state.z + 9.2;
+        if (!z.showcaseScaled) {
+          z.root.scale.multiplyScalar(1.12);
+          z.showcaseScaled = true;
+        }
+        playAnim(z.actions, ['Idle', 'Walk']);
+      }
+      if (z.showcaseActive) {
+        z.showcaseT = (z.showcaseT || 0) + dt;
+        z.z = state.z + 9.2; // freeze relative to muzzle
+        if (z.showcaseT >= 1.55) {
+          z.showcased = true;
+          z.showcaseActive = false;
+          playAnim(z.actions, ['Walk', 'Run', 'Idle']);
+        }
+      } else {
+        z.z -= z.approachSpeed * dt;
+      }
+    } else {
+      z.z -= z.approachSpeed * dt;
+    }
+
     z.root.position.z = z.z;
     z.root.position.x += (z.x - z.root.position.x) * dt * 2;
     z.hitCooldown = Math.max(0, z.hitCooldown - dt);
@@ -794,20 +841,22 @@ function update(dt) {
     }
   }
 
-  // Brief fire soft-pause while a readable wave sits in the muzzle showcase band.
+  // Hard soft-pause autofire while any readable pack is mid-showcase (readable ≥1.5s).
   let showcaseHold = false;
   for (const z of zombies) {
-    if (z.dead || !z.readable || z.showcased) continue;
+    if (z.dead || !z.readable) continue;
+    if (z.showcaseActive && !z.showcased) showcaseHold = true;
+    // Also hush fire while a debut pack is approaching the showcase band (prevents off-screen deletes).
     const dz = z.z - state.z;
-    if (dz > 4.5 && dz < 14) {
-      z.showcaseT = (z.showcaseT || 0) + dt;
-      if (z.showcaseT >= 1.55) z.showcased = true;
-      else showcaseHold = true;
-    }
+    if (!z.showcased && dz > 9 && dz < 22) showcaseHold = true;
   }
   const fs = fireStats(state.people, state.firepower);
-  fireAcc += showcaseHold ? dt * 0.18 : dt;
-  if (fireAcc >= fs.interval) tryFire();
+  if (!showcaseHold) {
+    fireAcc += dt;
+    if (fireAcc >= fs.interval) tryFire();
+  } else {
+    fireAcc = Math.min(fireAcc, fs.interval * 0.5);
+  }
 
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
@@ -820,7 +869,7 @@ function update(dt) {
         const next = shootGate(g, b.damage);
         Object.assign(g, next);
         g.visual.userData.redraw?.(g);
-        spawnFloat(gateLabelText(g), g.visual.position.clone().setY(2.2), '#ffe66d');
+        // No spawnFloat here — HTML gate labels already update; floats looked like stacked pairs.
         hit = true;
         break;
       }
@@ -828,6 +877,8 @@ function update(dt) {
     if (!hit) {
       for (const z of zombies) {
         if (z.dead) continue;
+        // Keep debut waves alive/readable until showcase completes.
+        if (z.readable && !z.showcased) continue;
         const zr = z.isBoss ? 1.1 : 0.7;
         const xr = z.isBoss ? 1.0 : 0.55;
         if (Math.abs(b.mesh.position.z - z.z) < zr && Math.abs(b.mesh.position.x - z.root.position.x) < xr) {
@@ -901,7 +952,7 @@ function update(dt) {
       let msg = gateLabelText(g);
       if (g.op === 'add' || g.op === 'mul') msg = `人数${gateLabelText(g)}`;
       if (g.op === 'fire' || g.op === 'fireMul') msg = `火力${g.op === 'fireMul' ? '×' : '+'}${g.value}`;
-      spawnFloat(msg, g.visual.position.clone().setY(2.4), '#fff');
+      spawnFloat(msg, g.visual.position.clone().setY(2.4), '#fff', { gate: true });
       g.visual.visible = false;
       if (g.visual.userData.labelEl) g.visual.userData.labelEl.style.display = 'none';
       syncSquadCount();
@@ -929,13 +980,14 @@ function render() {
   update(dt);
 
   shake = Math.max(0, shake - dt * 1.8);
-  const camX = playerX * 0.35 + (Math.random() - 0.5) * shake;
-  // Third-person: pull back + raise lookAt so full Sam + gun stay mid-frame.
   const z0 = state ? state.z : 0;
-  const camY = 3.55 + (Math.random() - 0.5) * shake * 0.25;
-  const camZ = z0 - 9.4;
+  // Classic follow cam: behind Sam, lookAt chest — NOT far down the road.
+  const camX = playerX * 0.15 + (Math.random() - 0.5) * shake * 0.35;
+  const camY = 2.65 + (Math.random() - 0.5) * shake * 0.15;
+  const camZ = z0 - 6.0;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX * 0.2, 1.62, z0 + 3.8);
+  // Slight lookahead ≤ +1.0 keeps Sam vertically centered in portrait.
+  camera.lookAt(playerX, 1.42, z0 + 0.85);
   camera.updateMatrixWorld();
 
   updateFloats(dt);

@@ -26,6 +26,8 @@
 ## PR1 跟进
 
 - [ ] 竖屏第三人称：Sam **全身 + 枪** 入画（不是只见枪口一排）
+  - Cam lock: `position (playerX*0.15, ~2.65, state.z-6.0)` · `lookAt(playerX, 1.42, state.z+0.85)` — lookAt Sam chest, not road ahead
+  - Visible squad ≤4, side flanks only, lead-only compact rifle; gate floats single-slot; readableWave showcase holds ~9.2m ≥1.5s
 - [ ] 门数字标签只显示最近 **1 对**（距离阈值内；远景不叠成地平线字墙）
 - [ ] 隐藏 QA：`?level=5` / `?level=10` 可直达 Boss 关
 
