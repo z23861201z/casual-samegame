@@ -2,19 +2,137 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
-  <meta name="theme-color" content="#0d0f16" />
-  <title>消灭同色方块 · Casual SameGame</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <meta name="theme-color" content="#0b1020" />
+  <title>Casual Arcade · 休闲小游戏合集</title>
+  <link rel="stylesheet" href="css/portal.css" />
 </head>
 <body>
-  <div id="app"></div>
-  <script src="js/core.js"></script>
-  <script src="js/particles.js"></script>
-  <script src="js/audio.js"></script>
-  <script src="js/render.js"></script>
-  <script src="js/ui.js"></script>
-  <script>window.__LEVELS__ = {"version":1,"score":{"base":"(n-2)^2","comboWindowMs":3000,"comboMultipliers":[1,1.5,2,2.5,3],"clearBonusDefault":1000},"colors":["#FF4D6D","#4D96FF","#6BCB77","#FFD93D","#C77DFF","#FF8C42"],"levels":[{"id":1,"name":"新手热身","rows":8,"cols":8,"colorCount":3,"targetScore":120,"moveLimit":null,"clearBonus":1000,"stoneCount":0,"seed":1001,"star2RemainingRatio":0.2,"star3RemainingRatio":0.05,"tutorial":true,"tier":"tutorial"},{"id":2,"name":"小试牛刀","rows":9,"cols":9,"colorCount":3,"targetScore":220,"moveLimit":null,"clearBonus":1000,"stoneCount":0,"seed":2002,"star2RemainingRatio":0.15,"star3RemainingRatio":0.05,"tier":"tutorial"},{"id":3,"name":"方形压力","rows":10,"cols":10,"colorCount":3,"targetScore":350,"moveLimit":40,"clearBonus":1000,"stoneCount":0,"seed":3003,"star2RemainingRatio":0.1,"star3RemainingRatio":0,"tier":"tutorial"},{"id":4,"name":"四色登场","rows":10,"cols":10,"colorCount":4,"targetScore":280,"moveLimit":45,"clearBonus":1000,"stoneCount":0,"seed":4004,"star2RemainingRatio":0.15,"star3RemainingRatio":0.05,"tier":"medium"},{"id":5,"name":"加宽战场","rows":10,"cols":12,"colorCount":4,"targetScore":400,"moveLimit":50,"clearBonus":1200,"stoneCount":0,"seed":5005,"star2RemainingRatio":0.12,"star3RemainingRatio":0.05,"tier":"medium"},{"id":6,"name":"障石试炼","rows":10,"cols":12,"colorCount":4,"targetScore":350,"moveLimit":45,"clearBonus":1200,"stoneCount":5,"seed":6006,"star2RemainingRatio":0.15,"star3RemainingRatio":0.08,"tier":"medium"},{"id":7,"name":"五色漩涡","rows":12,"cols":12,"colorCount":5,"targetScore":400,"moveLimit":55,"clearBonus":1500,"stoneCount":0,"seed":7046,"minLargestGroup":4,"star2RemainingRatio":0.18,"star3RemainingRatio":0.08,"tier":"medium"},{"id":8,"name":"限步冲刺","rows":12,"cols":14,"colorCount":5,"targetScore":350,"moveLimit":45,"clearBonus":1500,"stoneCount":3,"seed":8075,"star2RemainingRatio":0.12,"star3RemainingRatio":0.05,"tier":"hard"},{"id":9,"name":"巨岩迷宫","rows":12,"cols":14,"colorCount":5,"targetScore":450,"moveLimit":48,"clearBonus":1800,"stoneCount":8,"seed":9071,"star2RemainingRatio":0.1,"star3RemainingRatio":0.05,"tier":"hard"},{"id":10,"name":"终焉盘面","rows":14,"cols":16,"colorCount":5,"targetScore":500,"moveLimit":60,"clearBonus":2000,"stoneCount":6,"seed":1014,"star2RemainingRatio":0.05,"star3RemainingRatio":0,"tier":"hard"},{"id":11,"name":"无尽试炼","rows":14,"cols":16,"colorCount":6,"targetScore":450,"moveLimit":65,"clearBonus":2500,"stoneCount":10,"seed":1159,"star2RemainingRatio":0.08,"star3RemainingRatio":0.02,"tier":"hard"},{"id":12,"name":"极限同色","rows":15,"cols":18,"colorCount":6,"targetScore":480,"moveLimit":70,"clearBonus":3000,"stoneCount":12,"seed":1255,"star2RemainingRatio":0.05,"star3RemainingRatio":0,"tier":"hard"}]};</script>
-  <script src="js/game.js"></script>
+  <div class="portal">
+    <aside class="panel side">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div>
+          <h1>Casual Arcade</h1>
+          <p>本地合集门户</p>
+        </div>
+      </div>
+      <div class="cats" id="cats">
+        <button class="cat active" data-cat="all"><span>全部游戏</span><small>2</small></button>
+        <button class="cat" data-cat="puzzle"><span>益智消除</span><small>1</small></button>
+        <button class="cat" data-cat="runner"><span>跑酷射击</span><small>1</small></button>
+      </div>
+      <div class="footer-note">
+        打开方式：仓库根目录执行<br />
+        <code>python3 -m http.server 8080</code><br />
+        访问 <code>http://localhost:8080</code>
+      </div>
+    </aside>
+
+    <main class="panel stage">
+      <div class="stage-top">
+        <div>
+          <h2 id="gameTitle">数字门跑酷 · Gate Runner</h2>
+          <div class="tags" id="gameTags">
+            <span class="tag">Three.js</span>
+            <span class="tag">竖屏切片</span>
+            <span class="tag">Quaternius CC0</span>
+          </div>
+        </div>
+        <a class="btn secondary" id="openTab" href="games/gate-runner/" target="_blank" rel="noopener">新标签打开</a>
+      </div>
+      <div class="playframe">
+        <iframe id="play" title="game" src="games/gate-runner/" allow="autoplay; fullscreen"></iframe>
+      </div>
+      <div class="stage-bottom">
+        <div class="hint" id="gameHint">左右拖动变道 · 自动开火打门/僵尸 · 撞门加人/火力</div>
+        <div class="actions">
+          <button class="btn" id="playSame">玩 SameGame</button>
+          <button class="btn secondary" id="playGate">玩 Gate Runner</button>
+        </div>
+      </div>
+    </main>
+
+    <aside class="panel right">
+      <h3>推荐</h3>
+      <div class="recs">
+        <button class="rec" data-game="gate">
+          <div class="thumb gate">GR</div>
+          <div>
+            <b>Gate Runner</b>
+            <span>末日高架数字门跑酷。射门改数值，撞门加人，清僵尸。</span>
+          </div>
+        </button>
+        <button class="rec" data-game="same">
+          <div class="thumb same">SG</div>
+          <div>
+            <b>SameGame</b>
+            <span>同色连通消除、重力下落、连击倍率。经典益智。</span>
+          </div>
+        </button>
+      </div>
+      <div class="footer-note">
+        旧根路径 SameGame 已迁至 <code>games/samegame/</code>。<br />
+        本门户可直达两款游戏。
+      </div>
+    </aside>
+  </div>
+  <script>
+    const games = {
+      gate: {
+        title: '数字门跑酷 · Gate Runner',
+        src: 'games/gate-runner/',
+        hint: '左右拖动变道 · 自动开火打门/僵尸 · 撞门加人/火力',
+        tags: ['Three.js', '竖屏切片', 'Quaternius CC0'],
+        cats: ['all', 'runner']
+      },
+      same: {
+        title: '消灭同色方块 · SameGame',
+        src: 'games/samegame/',
+        hint: '点选 ≥2 同色连通块消除 · 下落与列压缩 · 冲目标分',
+        tags: ['Canvas', '益智', '12 关'],
+        cats: ['all', 'puzzle']
+      }
+    };
+
+    const play = document.getElementById('play');
+    const title = document.getElementById('gameTitle');
+    const hint = document.getElementById('gameHint');
+    const tags = document.getElementById('gameTags');
+    const openTab = document.getElementById('openTab');
+    let current = 'gate';
+    let filter = 'all';
+
+    function setGame(id) {
+      const g = games[id];
+      if (!g) return;
+      current = id;
+      play.src = g.src;
+      title.textContent = g.title;
+      hint.textContent = g.hint;
+      openTab.href = g.src;
+      tags.innerHTML = g.tags.map(t => `<span class="tag">${t}</span>`).join('');
+    }
+
+    document.getElementById('playSame').onclick = () => setGame('same');
+    document.getElementById('playGate').onclick = () => setGame('gate');
+    document.querySelectorAll('.rec').forEach(el => el.onclick = () => setGame(el.dataset.game));
+    document.querySelectorAll('.cat').forEach(el => {
+      el.onclick = () => {
+        document.querySelectorAll('.cat').forEach(c => c.classList.remove('active'));
+        el.classList.add('active');
+        filter = el.dataset.cat;
+        document.querySelectorAll('.rec').forEach(rec => {
+          const g = games[rec.dataset.game];
+          rec.style.display = g.cats.includes(filter) ? '' : 'none';
+        });
+      };
+    });
+
+    // Deep link: ?game=samegame|gate-runner
+    const q = new URLSearchParams(location.search).get('game');
+    if (q === 'samegame' || q === 'same') setGame('same');
+    else setGame('gate');
+  </script>
 </body>
 </html>

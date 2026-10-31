@@ -1,0 +1,18 @@
+{
+  "id": 1,
+  "name": "高架起步",
+  "length": 120,
+  "startPeople": 10,
+  "startFirepower": 1,
+  "runSpeed": 10,
+  "roadHalfWidth": 3.2,
+  "events": [
+    { "z": 18, "type": "gatePair", "left": { "op": "add", "value": 1, "hp": 8 }, "right": { "op": "add", "value": 8, "hp": 18 } },
+    { "z": 36, "type": "zombies", "count": 3, "hp": 3, "kind": "zombie", "spread": 2.2 },
+    { "z": 52, "type": "gatePair", "left": { "op": "mul", "value": 2, "hp": 14 }, "right": { "op": "add", "value": 5, "hp": 12 } },
+    { "z": 68, "type": "zombies", "count": 5, "hp": 4, "kind": "zombie-half", "spread": 2.6 },
+    { "z": 84, "type": "gatePair", "left": { "op": "add", "value": 12, "hp": 20 }, "right": { "op": "mul", "value": 2, "hp": 22 } },
+    { "z": 98, "type": "zombies", "count": 6, "hp": 5, "kind": "big-arm", "spread": 2.8 },
+    { "z": 112, "type": "finish", "needPeople": 8 }
+  ]
+}
