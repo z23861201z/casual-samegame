@@ -69,7 +69,7 @@ scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
-camera.position.set(0, 2.35, -6.2);
+camera.position.set(0, 2.5, -6.5);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -227,59 +227,78 @@ function stripLooseWeapons(root) {
   return hidden;
 }
 
-/** Find a right-hand-ish bone for parenting a tiny held prop. */
-function findHandBone(root, prefer = 'right') {
-  let found = null;
-  const preferRe = prefer === 'right'
-    ? /(hand\.?r|wrist\.?r|lowerarm\.?r|mixamorig.?righthand|right.?hand)/i
-    : /(hand\.?l|wrist\.?l|lowerarm\.?l|mixamorig.?lefthand|left.?hand)/i;
-  const fallbackRe = /(hand|wrist|lowerarm|middle1)/i;
-  root.traverse(o => {
-    if (found || !o.isBone && o.type !== 'Bone' && !o.isObject3D) return;
-    const n = o.name || '';
-    if (preferRe.test(n)) found = o;
-  });
-  if (found) return found;
-  root.traverse(o => {
-    if (found) return;
-    const n = o.name || '';
-    if (/Middle1\.R|Hand\.R|LowerArm\.R/i.test(n)) found = o;
-  });
-  if (found) return found;
-  root.traverse(o => {
-    if (found) return;
-    const n = o.name || '';
-    if (fallbackRe.test(n) && /\.R|Right/i.test(n)) found = o;
-  });
-  return found;
-}
-
-/** Tiny clearly-held prop (never a world bind-pose rifle). */
+/**
+ * Bright short gun parented ONLY to Sam root at a fixed local pose.
+ * Never parent to Quaternius hand bones — non-1 bone scale turns the
+ * dark cylinder into a near-camera black occluder (menu bar / wedges).
+ */
 function attachPrimitiveGun(root) {
+  // Drop any previous primitive gun (squad rebuild / re-attach).
+  const stale = root.getObjectByName('primitiveGun');
+  if (stale) root.remove(stale);
+
   const gun = new THREE.Group();
+  gun.name = 'primitiveGun';
+  // Bright metal + orange so the held weapon reads clearly in portrait shots.
   const barrel = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.03, 0.035, 0.42, 6),
-    new THREE.MeshStandardMaterial({ color: 0x2a2e33, metalness: 0.6, roughness: 0.35 })
+    new THREE.CylinderGeometry(0.028, 0.034, 0.28, 8),
+    new THREE.MeshStandardMaterial({
+      color: 0xd8dee6, metalness: 0.85, roughness: 0.25,
+      emissive: 0x334455, emissiveIntensity: 0.25
+    })
   );
   barrel.rotation.x = Math.PI / 2;
-  barrel.position.z = 0.12;
+  barrel.position.set(0, 0.02, 0.14);
   const body = new THREE.Mesh(
-    new THREE.BoxGeometry(0.07, 0.1, 0.22),
-    new THREE.MeshStandardMaterial({ color: 0x1a1c1f, metalness: 0.4, roughness: 0.5 })
+    new THREE.BoxGeometry(0.08, 0.11, 0.18),
+    new THREE.MeshStandardMaterial({
+      color: 0xff8a1f, metalness: 0.55, roughness: 0.4,
+      emissive: 0x662200, emissiveIntensity: 0.35
+    })
   );
+  const stock = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 0.07, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0xcfd6df, metalness: 0.7, roughness: 0.3 })
+  );
+  stock.position.set(0, -0.02, -0.12);
   gun.add(body);
   gun.add(barrel);
-  const hand = findHandBone(root, 'right');
-  if (hand) {
-    gun.position.set(0.02, -0.02, 0.08);
-    gun.rotation.set(-0.15, 0, 0.1);
-    hand.add(gun);
-  } else {
-    // Chest fallback — still moves with Sam, never left at world bind pose.
-    gun.position.set(0.22, 1.15, 0.28);
-    root.add(gun);
-  }
+  gun.add(stock);
+  // Fixed local pose on character root — never a bone.
+  gun.position.set(0.28, 1.05, 0.45);
+  gun.rotation.set(-0.05, 0.15, 0.05);
+  gun.scale.set(1, 1, 1);
+  root.add(gun);
   return gun;
+}
+
+/** Safety net: hide absurd near-camera meshes (bone-scale blowups / leftovers). */
+function hideNearCameraOccluders() {
+  const camPos = camera.position;
+  const box = new THREE.Box3();
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  const roots = [];
+  if (world) roots.push(world);
+  for (const s of squad) if (s?.root) roots.push(s.root);
+  for (const root of roots) {
+    root.traverse(o => {
+      if (!o.isMesh || o.visible === false) return;
+      // Never hide the intentional bright gun.
+      if (o.name === 'primitiveGun' || o.parent?.name === 'primitiveGun') return;
+      o.updateWorldMatrix(true, false);
+      box.setFromObject(o);
+      if (box.isEmpty()) return;
+      box.getSize(size);
+      box.getCenter(center);
+      const diag = size.length();
+      const dist = center.distanceTo(camPos);
+      // Primary guard: close + large. Extra: any huge mesh within 4m.
+      if ((dist < 3 && diag > 2.5) || (dist < 4 && diag > 3)) {
+        o.visible = false;
+      }
+    });
+  }
 }
 
 function playAnim(actions, names, fade = 0.2) {
@@ -373,20 +392,20 @@ function buildRoad(length) {
     if (i % 2 === 0) {
       const { root: bar } = cloneModel(i % 4 === 0 ? 'barrier' : 'plastic', 1);
       fitProp(bar, 1.2);
-      placeOnGround(bar, (i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 1.3), i * segLen + 2);
+      placeOnGround(bar, (i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 2.0), i * segLen + 2);
       roadGroup.add(bar);
     }
     // No barrel.glb roadside props — at distance they read as gun barrels / planted rifles.
     if (i % 4 === 1) {
       const { root: light } = cloneModel('light', 1);
       fitProp(light, 2.4);
-      placeOnGround(light, -level.roadHalfWidth - 2.2, i * segLen + 3);
+      placeOnGround(light, -level.roadHalfWidth - 2.8, i * segLen + 3);
       roadGroup.add(light);
     }
     if (i % 5 === 3) {
       const { root: cone } = cloneModel('cone', 1);
       fitProp(cone, 0.7);
-      placeOnGround(cone, (i % 10 === 3 ? 1 : -1) * (level.roadHalfWidth + 1.5), i * segLen + 4);
+      placeOnGround(cone, (i % 10 === 3 ? 1 : -1) * (level.roadHalfWidth + 2.1), i * segLen + 4);
       roadGroup.add(cone);
     }
   }
@@ -539,8 +558,8 @@ function spawnEnemy(ev, i, count) {
   let height = enemyHeight(kind, isBoss, ev.scale || null);
   const bossLike = isBoss || ev.type === 'boss' || kind === 'dragon-evolved';
   if (bossLike) {
-    // Mini ≤1.8, finale ≤2.4 — director QA: dragon was swallowing portrait cam.
-    height = ev.mini ? 1.8 : 2.4;
+    // Mini ≤1.8, finale ≤2.2 — keep dragon out of near plane / portrait swallow.
+    height = ev.mini ? 1.8 : 2.2;
   }
   // Readable debut: target ~2.2m tall; lazy-activate when player nears.
   const readable = !!ev.readableWave;
@@ -563,21 +582,21 @@ function spawnEnemy(ev, i, count) {
   const spread = ev.spread || 2.2;
   const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
   const zJitter = readable ? (Math.random() - 0.5) * 0.15 : (Math.random() - 0.5) * 1.2;
-  // Spawn at event z; bosses always well ahead of cam (never open inside mesh).
+  // Spawn at event z; bosses always ≥25m ahead of cam (never open inside mesh).
   let z = (ev.z || 0) + zJitter;
   if (bossLike) {
     const startZ = state ? state.z : 0;
-    z = Math.max(z, ev.z || 0, startZ + 22);
+    z = Math.max(z, ev.z || 0, startZ + 25);
   }
   // Quaternius +Z forward: Math.PI faces -Z toward player/camera behind.
   root.rotation.y = Math.PI;
   const groundY = placeOnGround(root, x, z);
   entityGroup.add(root);
 
-  // ?level=10: keep finale boss hidden until player has run past z>8.
+  // Finale: briefly hide until player leaves menu start, then park ≥25m ahead on lane.
   let appearAfterZ = -Infinity;
   if (bossLike && (level?.id === 10 || new URLSearchParams(location.search).get('level') === '10')) {
-    appearAfterZ = 8;
+    appearAfterZ = 1;
     root.visible = false;
   }
 
@@ -611,10 +630,7 @@ function spawnEnemy(ev, i, count) {
     // Park far / invisible until activation band — prevents off-screen deletes.
     root.visible = false;
   }
-  if (enemy.isBoss && root.visible) {
-    enemy.hpBar = makeBossHpBar();
-    updateBossHpBar(enemy);
-  }
+  // Boss HP bar is created/shown only while running & in range (see syncBossHpBarVisibility).
   zombies.push(enemy);
   return enemy;
 }
@@ -626,6 +642,26 @@ function updateBossHpBar(z) {
   if (fill) fill.style.width = `${Math.floor(pct * 100)}%`;
   const label = z.hpBar.querySelector('.boss-hp-label');
   if (label) label.textContent = z.mini ? '迷你龙 BOSS' : '巨龙 BOSS';
+}
+
+/** Boss bar only while running, past start, and within 40m of a live boss. */
+function syncBossHpBarVisibility() {
+  const bosses = zombies.filter(z => z.isBoss && !z.dead);
+  for (const z of bosses) {
+    const dist = Math.abs((z.z ?? 0) - (state?.z ?? 0));
+    const show = !!(running && state && state.z > 1 && z.root?.visible !== false && dist < 40);
+    if (show) {
+      if (!z.hpBar) z.hpBar = makeBossHpBar();
+      z.hpBar.style.display = '';
+      updateBossHpBar(z);
+    } else if (z.hpBar) {
+      z.hpBar.style.display = 'none';
+    }
+  }
+  // Menu / pre-run / no boss: strip any leftover bars.
+  if (!running || !bosses.length) {
+    document.querySelectorAll('.boss-hp').forEach(el => { el.style.display = 'none'; });
+  }
 }
 
 function spawnFromLevel() {
@@ -679,7 +715,7 @@ function spawnPlayer() {
   playerRoot = root;
   playerMixer = mixer;
   playerActions = actions;
-  // Empty-handed Run + tiny primitive in hand (Run_Gun embeds weapons that detach on clone).
+  // Run clip + bright root-parented gun (never bone-parented).
   playAnim(actions, ['Run', 'Idle']);
   attachPrimitiveGun(root);
   squad.push({ root, mixer, actions, groundY });
@@ -695,6 +731,7 @@ function syncSquadCount() {
     const groundY = placeOnGround(root, 0, state ? state.z : 0);
     world.add(root);
     playAnim(actions, ['Run', 'Idle']);
+    attachPrimitiveGun(root);
     squad.push({ root, mixer, actions, groundY });
   }
   while (squad.length > want) {
@@ -949,19 +986,16 @@ function update(dt) {
     // Finale boss: stay hidden until player has moved past appearAfterZ.
     if (z.appearAfterZ > -Infinity && state.z <= z.appearAfterZ) {
       z.root.visible = false;
-      z.root.position.z = Math.max(z.z, state.z + 22);
+      z.root.position.z = Math.max(z.z, state.z + 25);
       z.z = z.root.position.z;
       z.root.position.y = z.groundY ?? 0;
       continue;
     }
     if (z.appearAfterZ > -Infinity && !z.root.visible && !z.dead) {
       z.root.visible = true;
-      z.z = Math.max(z.eventZ || z.z, state.z + 22);
+      // Park ≥25m ahead on lane so finale reads within first ~15s (not fogged at 120m).
+      z.z = Math.max(state.z + 25, Math.min(z.eventZ || (state.z + 25), state.z + 55));
       z.groundY = placeOnGround(z.root, z.x, z.z);
-      if (z.isBoss && !z.hpBar) {
-        z.hpBar = makeBossHpBar();
-        updateBossHpBar(z);
-      }
     }
 
     // Lazy-activate readable wave when event is within 14m; place pack at z+8.5 for 1.6s.
@@ -984,7 +1018,8 @@ function update(dt) {
       }
       if (z.showcaseActive) {
         z.showcaseT = (z.showcaseT || 0) + dt;
-        z.z = state.z + 8.5; // freeze in readable band
+        z.z = state.z + 8.5; // freeze in readable band ≥1.6s
+        z.root.visible = true;
         z.root.rotation.y = Math.PI;
         if (z.showcaseT >= 1.6) {
           z.showcased = true;
@@ -992,6 +1027,7 @@ function update(dt) {
           playAnim(z.actions, ['Walk', 'Run', 'Idle']);
         }
       } else if (z.spawnedVisible) {
+        z.root.visible = true;
         z.z -= z.approachSpeed * dt;
       }
       // else: still waiting for activation — keep parked at event z, hidden
@@ -1195,18 +1231,21 @@ function render() {
 
   shake = Math.max(0, shake - dt * 1.8);
   const z0 = state ? state.z : 0;
-  // Tighter portrait chase: Sam stays lower-mid frame the whole run (no look-far-down-road).
+  // Keep Sam framed 3s+: slightly higher / farther chase, look at torso.
   const camX = playerX * 0.08 + (Math.random() - 0.5) * shake * 0.25;
-  const camY = 2.35 + (Math.random() - 0.5) * shake * 0.12;
-  const camZ = z0 - 6.2;
+  const camY = 2.5 + (Math.random() - 0.5) * shake * 0.12;
+  const camZ = z0 - 6.5;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX, 1.25, z0 + 0.35);
+  camera.lookAt(playerX, 1.3, z0 + 0.4);
   camera.updateMatrixWorld();
 
   // Re-ground Sam each frame so animation/sync never zeros Y.
   for (const s of squad) {
     if (s.root) s.root.position.y = s.groundY ?? 0;
   }
+
+  hideNearCameraOccluders();
+  syncBossHpBarVisibility();
 
   updateFloats(dt);
   updateGateLabels();

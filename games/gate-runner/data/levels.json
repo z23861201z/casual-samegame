@@ -215,7 +215,7 @@
       { "z": 90, "type": "gatePair", "left": { "op": "fire", "value": 2, "hp": 14 }, "right": { "op": "add", "value": 10, "hp": 14 } },
       { "z": 102, "type": "zombies", "count": 3, "hp": 11, "kind": "yeti", "spread": 2.4 },
       { "z": 114, "type": "gatePair", "left": { "op": "fireMul", "value": 2, "hp": 20 }, "right": { "op": "mul", "value": 2, "hp": 18 } },
-      { "z": 128, "type": "boss", "kind": "dragon-evolved", "hp": 120, "scale": 3.2, "mini": false },
+      { "z": 36, "type": "boss", "kind": "dragon-evolved", "hp": 120, "scale": 2.2, "mini": false },
       { "z": 145, "type": "finish", "needPeople": 8 }
     ]
   }
