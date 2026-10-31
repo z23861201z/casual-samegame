@@ -1,6 +1,6 @@
-# 数字门跑酷 · Gate Runner（PR1 竖屏切片）
+# 数字门跑酷 · Gate Runner（PR2 · 十关战役）
 
-Three.js 第三人称竖屏跑酷：自动前进、左右拖动、自动开火；射击左右数字门可抬高数值/改变门宽；穿门获得人数或火力；前方僵尸可打，撞到扣人。
+Three.js 第三人称竖屏跑酷：自动前进、左右拖动、自动开火；射击左右数字门可抬高数值/改变门宽；穿门获得人数或火力；前方怪物可打，撞到扣人。含 **10 关**、**≥6 种怪物** 与 **Dragon Evolved Boss**（第 5 关迷你龙 + 第 10 关终局）。
 
 ## 本地打开
 
@@ -24,11 +24,28 @@ python3 -m http.server 8080
 | ← → / A D | 左右微调 |
 | 自动 | 前进与开火 |
 
+## 关卡概要
+
+| Lv | 主题 | 怪物 |
+|----|------|------|
+| 1 | 教程 | Zombie |
+| 2 | 热身 ×门 | Zombie + half |
+| 3 | 混战 | + Big arm |
+| 4 | 火力 | Orc |
+| 5 | 中段 | Demon + 迷你 Dragon Evolved |
+| 6 | 压力 | Yeti + half |
+| 7 | 近战轮转 | 全种类 |
+| 8 | 精英 | Orc / Demon / Yeti |
+| 9 | 冲刺补给 | 全种类 |
+| 10 | 终局 | 混编 + 全血 Dragon Evolved |
+
+星级：通关 1★；剩余人数达阈值 2★；人数+火力达阈值 3★（见 `data/levels.json` → `stars`）。
+
 ## 技术
 
 - Three.js r170（jsDelivr import map）
 - `EffectComposer` + `UnrealBloomPass`
-- Fog + 自发光门
+- Fog + 自发光门；门数字 HTML 投影（仅最近 1–2 对）
 - Quaternius CC0 glTF（见 `ATTRIBUTION.md`）
 
 ## 目录
@@ -37,9 +54,10 @@ python3 -m http.server 8080
 games/gate-runner/
   index.html
   css/style.css
-  js/main.js          # 场景 / 输入 / 循环
-  js/core.js          # 纯逻辑
-  data/level1.json
+  js/main.js
+  js/core.js
+  data/levels.json
+  data/level1.json      # L1 快照（兼容）
   assets/gltf/
   scripts/download-quaternius.sh
   ATTRIBUTION.md
@@ -51,5 +69,5 @@ games/gate-runner/
 见 `SELFTEST.md`。逻辑冒烟：
 
 ```bash
-node --input-type=module -e "import('./js/core.js').then(m=>console.log(m.applyGate(3,1,{op:'add',value:8})))"
+node games/gate-runner/tests/core-test.mjs
 ```

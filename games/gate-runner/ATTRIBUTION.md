@@ -13,7 +13,7 @@
 | File | Source model |
 |------|----------------|
 | `sam.glb` | Characters Sam |
-| `matt.glb` | Characters Matt (downloaded; PR1 player uses Sam) |
+| `matt.glb` | Characters Matt (downloaded; player uses Sam) |
 | `zombie.glb` / `zombie-b.glb` | Zombie |
 | `zombie-half.glb` | Zombie half |
 | `big-arm.glb` | Big arm |
@@ -28,6 +28,21 @@
 | `pallet.glb` | Pallet |
 | `rifle.glb` | Rifle |
 
+## Quaternius — Ultimate Monsters (CC0)
+
+- Pack page: https://quaternius.com/packs/ultimatemonsters.html
+- Poly Pizza bundle: https://poly.pizza/bundle/Ultimate-Monsters-Bundle-5oyGWAmOB6
+- License: **CC0 / Public Domain**
+
+| File | Source model | Poly Pizza |
+|------|----------------|------------|
+| `orc.glb` | Orc | https://poly.pizza/m/5vO2YJsPEf |
+| `demon.glb` | Demon | https://poly.pizza/m/Mo2ky6vkf8 |
+| `yeti.glb` | Yeti | https://poly.pizza/m/ceRHrn8HHE |
+| `dragon-evolved.glb` | Dragon Evolved | https://poly.pizza/m/LlwD0QNUPj |
+
+Animations used for Boss Dragon Evolved: `Punch` / `Headbutt` (attack), `HitReact`, `Death`, plus `Flying_Idle`.
+
 See `assets/gltf/manifest.json` for poly.pizza model IDs and source URLs.
 
 ### Re-download
@@ -37,7 +52,7 @@ See `assets/gltf/manifest.json` for poly.pizza model IDs and source URLs.
 bash scripts/download-quaternius.sh
 ```
 
-Optional full official Drive folder (all formats):  
+Optional full official Drive folder (Post Apocalypse):  
 https://drive.google.com/drive/folders/1mWP6sCHun7OUMHQeDNZLrXTteXlzWg_t
 
 ## Three.js

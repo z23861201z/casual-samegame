@@ -5,7 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import {
   applyGate, shootGate, damageZombie, collideCost, fireStats,
-  starRating, createLevelState, progress
+  starRating, createLevelState, progress, kindToAssetKey, enemyHeight
 } from './core.js';
 
 const ASSET = {
@@ -13,6 +13,10 @@ const ASSET = {
   zombie: 'assets/gltf/zombie.glb',
   zombieHalf: 'assets/gltf/zombie-half.glb',
   bigArm: 'assets/gltf/big-arm.glb',
+  orc: 'assets/gltf/orc.glb',
+  demon: 'assets/gltf/demon.glb',
+  yeti: 'assets/gltf/yeti.glb',
+  dragonEvolved: 'assets/gltf/dragon-evolved.glb',
   street: 'assets/gltf/street-straight.glb',
   streetCrack: 'assets/gltf/street-straight-crack.glb',
   barrier: 'assets/gltf/traffic-barrier.glb',
@@ -30,13 +34,19 @@ const hudPeople = document.getElementById('people');
 const hudFire = document.getElementById('fire');
 const hudScore = document.getElementById('score');
 const hudProg = document.getElementById('prog');
+const hudLevel = document.getElementById('levelNum');
 const banner = document.getElementById('banner');
 const overlay = document.getElementById('overlay');
 const settle = document.getElementById('settle');
 const loading = document.getElementById('loading');
 const loadMsg = document.getElementById('loadMsg');
 const loadBar = document.getElementById('loadBar');
+const btnStart = document.getElementById('btnStart');
+const btnNext = document.getElementById('btnNext');
+const startMeta = document.getElementById('startMeta');
 
+let levels = [];
+let levelIndex = 0; // 0-based
 let level = null;
 let state = null;
 let running = false;
@@ -59,16 +69,14 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
-const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 200);
-camera.position.set(0, 3.4, -6.4);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 2.9, -7.4);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-// Milder bloom: panels/emissives still glow; number HUD is HTML (not bloomed).
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.55, 0.92);
 composer.addPass(bloom);
 
-// Lights — bright enough for screen recording
 const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.35);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff5e0, 2.1);
@@ -111,9 +119,11 @@ function setLoad(p, msg) {
   if (msg) loadMsg.textContent = msg;
 }
 
-async function loadLevel() {
-  const res = await fetch('data/level1.json');
-  level = await res.json();
+async function loadLevels() {
+  const res = await fetch('data/levels.json');
+  levels = await res.json();
+  levelIndex = 0;
+  level = levels[0];
 }
 
 async function loadAssets() {
@@ -166,33 +176,29 @@ function cloneModel(key, scale = 1) {
 
 function makeFallback(key, scale) {
   const g = new THREE.Group();
-  let mesh;
-  if (key.includes('zombie') || key === 'bigArm') {
-    mesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.35, 0.9, 4, 8),
-      new THREE.MeshStandardMaterial({ color: 0x5aa85a, emissive: 0x143014, roughness: 0.35, roughness: 0.7 })
-    );
-  } else if (key === 'sam') {
-    mesh = new THREE.Mesh(
-      new THREE.CapsuleGeometry(0.32, 0.95, 4, 8),
-      new THREE.MeshStandardMaterial({ color: 0x3d7dff, emissive: 0x102040, roughness: 0.4, roughness: 0.55 })
-    );
-  } else {
-    mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1, 1, 1),
-      new THREE.MeshStandardMaterial({ color: 0xb0b8c8, roughness: 0.5, roughness: 0.4 })
-    );
-  }
+  const monsterKeys = ['zombie', 'zombieHalf', 'bigArm', 'orc', 'demon', 'yeti', 'dragonEvolved'];
+  let color = 0xb0b8c8;
+  if (monsterKeys.includes(key)) color = key === 'dragonEvolved' ? 0xc44a2f : 0x5aa85a;
+  else if (key === 'sam') color = 0x3d7dff;
+  const mesh = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.35, key === 'dragonEvolved' ? 1.4 : 0.9, 4, 8),
+    new THREE.MeshStandardMaterial({ color, emissive: 0x143014, roughness: 0.35, metalness: 0.7 })
+  );
   mesh.castShadow = true;
   g.add(mesh);
   g.scale.setScalar(scale);
   return { root: g, mixer: null, actions: {}, gltf: null };
 }
 
-function playAnim(actions, name, fade = 0.2) {
-  if (!actions) return;
-  const act = actions[name] || actions[`CharacterArmature|${name}`];
-  if (!act) return;
+function playAnim(actions, names, fade = 0.2) {
+  if (!actions) return null;
+  const list = Array.isArray(names) ? names : [names];
+  let act = null;
+  for (const name of list) {
+    act = actions[name] || actions[`CharacterArmature|${name}`];
+    if (act) break;
+  }
+  if (!act) return null;
   Object.values(actions).forEach(a => { if (a !== act && a.isRunning?.()) a.fadeOut(fade); });
   act.reset().fadeIn(fade).play();
   return act;
@@ -245,7 +251,6 @@ function buildRoad(length) {
     root.position.set(0, -box2.min.y, i * segLen + segLen * 0.5);
     roadGroup.add(root);
 
-    // hazard edge strips
     for (const side of [-1, 1]) {
       const strip = new THREE.Mesh(
         new THREE.BoxGeometry(0.35, 0.2, segLen * 0.98),
@@ -281,7 +286,6 @@ function buildRoad(length) {
     }
   }
 
-  // elevated slab under road for readability
   const slab = new THREE.Mesh(
     new THREE.BoxGeometry(level.roadHalfWidth * 2 + 3.5, 0.6, length + 40),
     new THREE.MeshStandardMaterial({ color: 0xb9c0c7, roughness: 0.85, metalness: 0.05 })
@@ -303,15 +307,22 @@ function fitProp(root, targetHeight) {
 }
 
 function gateLabelText(gate) {
-  return gate.op === 'mul' || gate.op === 'fireMul' ? `×${gate.value}` : `+${gate.value}`;
+  if (gate.op === 'mul' || gate.op === 'fireMul') return `×${gate.value}`;
+  if (gate.op === 'fire') return `火力+${gate.value}`;
+  if (gate.op === 'sub') return `-${gate.value}`;
+  return `+${gate.value}`;
 }
 
 function gateSideColors(gate, side) {
-  // Clear left/right ad-style palette; mul gates stay purple but still side-tinted.
   if (gate.op === 'mul' || gate.op === 'fireMul') {
     return side < 0
       ? { color: 0xff7a18, emissive: 0x994400, frame: 0xffb347, css: '#ffb347' }
       : { color: 0x7a3cff, emissive: 0x3a1488, frame: 0xc9a0ff, css: '#e0c4ff' };
+  }
+  if (gate.op === 'fire') {
+    return side < 0
+      ? { color: 0xff5a3d, emissive: 0x881800, frame: 0xff9a7a, css: '#ffb09a' }
+      : { color: 0xff8a3d, emissive: 0x883000, frame: 0xffc08a, css: '#ffd0a8' };
   }
   return side < 0
     ? { color: 0xffc933, emissive: 0xaa6600, frame: 0xffe066, css: '#ffe066' }
@@ -322,7 +333,6 @@ function makeGateVisual(gate, side) {
   const group = new THREE.Group();
   const colors = gateSideColors(gate, side);
   const w = 2.6 * (gate.widthScale || 1);
-  // Panel keeps emissive glow for Bloom, but intensity stays moderate so it does not wash white.
   const mat = new THREE.MeshStandardMaterial({
     color: colors.color,
     emissive: colors.emissive,
@@ -336,7 +346,6 @@ function makeGateVisual(gate, side) {
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.4), mat);
   panel.position.y = 1.35;
   group.add(panel);
-  // Colored frame (not white) — left gold / right blue so sides read instantly.
   const frame = new THREE.Mesh(
     new THREE.BoxGeometry(w + 0.18, 2.58, 0.14),
     new THREE.MeshStandardMaterial({
@@ -350,7 +359,6 @@ function makeGateVisual(gate, side) {
   frame.position.y = 1.35;
   group.add(frame);
 
-  // Number is HTML world-projected (MeshBasic / CSS HUD) — never passes UnrealBloomPass.
   const labelEl = document.createElement('div');
   labelEl.className = 'gate-num';
   labelEl.dataset.side = side < 0 ? 'left' : 'right';
@@ -369,10 +377,69 @@ function makeGateVisual(gate, side) {
   return group;
 }
 
+function makeBossHpBar() {
+  const el = document.createElement('div');
+  el.className = 'boss-hp';
+  el.innerHTML = '<span class="boss-hp-label">BOSS</span><i></i>';
+  document.getElementById('hud').appendChild(el);
+  return el;
+}
+
+function spawnEnemy(ev, i, count) {
+  const kind = ev.kind || 'zombie';
+  const assetKey = kindToAssetKey(kind);
+  const isBoss = ev.type === 'boss' || kind === 'dragon-evolved' && ev.hp >= 40;
+  const { root, mixer, actions } = cloneModel(assetKey, 1);
+  const height = enemyHeight(kind, isBoss, ev.scale || null);
+  // Readable wave: slightly larger + spawn further ahead so they walk into camera.
+  const readable = !!ev.readableWave;
+  fitProp(root, readable ? height * 1.12 : height);
+  const spread = ev.spread || 2.2;
+  const x = count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * spread;
+  const zJitter = readable ? (Math.random() - 0.5) * 0.4 : (Math.random() - 0.5) * 1.2;
+  const z = (ev.z || 0) + zJitter + (readable ? 2.5 : 0);
+  root.position.set(x, 0, z);
+  root.rotation.y = Math.PI;
+  entityGroup.add(root);
+
+  if (isBoss || assetKey === 'dragonEvolved' || assetKey === 'demon') {
+    playAnim(actions, ['Flying_Idle', 'Idle', 'Walk', 'Run']);
+  } else {
+    playAnim(actions, readable ? ['Run', 'Walk', 'Idle'] : ['Walk', 'Run', 'Idle']);
+  }
+
+  const enemy = {
+    root, mixer, actions,
+    hp: ev.hp, maxHp: ev.hp, x, z,
+    dead: false, hitCooldown: 0,
+    kind, isBoss: !!isBoss || ev.type === 'boss',
+    mini: !!ev.mini,
+    attackAcc: 0,
+    approachSpeed: readable ? 3.4 : (isBoss || ev.type === 'boss' ? 0.55 : 1.6),
+    hpBar: null
+  };
+  if (enemy.isBoss) {
+    enemy.hpBar = makeBossHpBar();
+    updateBossHpBar(enemy);
+  }
+  zombies.push(enemy);
+  return enemy;
+}
+
+function updateBossHpBar(z) {
+  if (!z.hpBar) return;
+  const pct = Math.max(0, z.hp / Math.max(1, z.maxHp));
+  const fill = z.hpBar.querySelector('i');
+  if (fill) fill.style.width = `${Math.floor(pct * 100)}%`;
+  const label = z.hpBar.querySelector('.boss-hp-label');
+  if (label) label.textContent = z.mini ? '迷你龙 BOSS' : '巨龙 BOSS';
+}
+
 function spawnFromLevel() {
   gates.length = 0; zombies.length = 0;
   const labelHost = document.getElementById('gateLabels');
   if (labelHost) labelHost.innerHTML = '';
+  document.querySelectorAll('.boss-hp').forEach(el => el.remove());
   while (entityGroup.children.length) entityGroup.remove(entityGroup.children[0]);
   for (const ev of level.events) {
     if (ev.type === 'gatePair') {
@@ -384,22 +451,9 @@ function spawnFromLevel() {
         gates.push({ ...raw, visual });
       }
     } else if (ev.type === 'zombies') {
-      const kind = ev.kind === 'zombie-half' ? 'zombieHalf' : (ev.kind === 'big-arm' ? 'bigArm' : 'zombie');
-      for (let i = 0; i < ev.count; i++) {
-        const { root, mixer, actions } = cloneModel(kind, 1);
-        // Larger zombies so they read clearly on portrait recordings.
-        fitProp(root, kind === 'bigArm' ? 2.85 : 2.45);
-        const x = ((i / Math.max(1, ev.count - 1)) - 0.5) * ev.spread;
-        root.position.set(x, 0, ev.z + (Math.random() - 0.5) * 1.2);
-        root.rotation.y = Math.PI; // face player (coming from -z camera looking +z-ish)
-        entityGroup.add(root);
-        playAnim(actions, 'Walk') || playAnim(actions, 'Run') || playAnim(actions, 'Idle');
-        zombies.push({
-          root, mixer, actions,
-          hp: ev.hp, maxHp: ev.hp, x, z: root.position.z,
-          dead: false, hitCooldown: 0
-        });
-      }
+      for (let i = 0; i < ev.count; i++) spawnEnemy(ev, i, ev.count);
+    } else if (ev.type === 'boss') {
+      spawnEnemy(ev, 0, 1);
     } else if (ev.type === 'finish') {
       const arch = new THREE.Group();
       const mat = new THREE.MeshStandardMaterial({ color: 0xffe66d, emissive: 0xaa8800, emissiveIntensity: 1.2, transparent: true, opacity: 0.8 });
@@ -426,16 +480,14 @@ function spawnPlayer() {
   const { root, mixer, actions } = cloneModel('sam', 1);
   fitProp(root, 1.75);
   root.position.set(0, 0, 0);
-  // Quaternius characters often face +Z; we run toward +Z, camera behind at -Z
   root.rotation.y = 0;
   world.add(root);
   playerRoot = root;
   playerMixer = mixer;
   playerActions = actions;
-  playAnim(actions, 'Run_Gun') || playAnim(actions, 'Run') || playAnim(actions, 'Idle_Gun');
+  playAnim(actions, ['Run_Gun', 'Run', 'Idle_Gun', 'Idle']);
   squad.push({ root, mixer, actions });
 
-  // rifle attach approx
   if (templates.rifle) {
     const { root: gun } = cloneModel('rifle', 1);
     fitProp(gun, 0.55);
@@ -446,13 +498,12 @@ function spawnPlayer() {
 }
 
 function syncSquadCount() {
-  // visual extras as ghost clones beside leader
   const want = Math.min(9, state.people);
   while (squad.length < want) {
     const { root, mixer, actions } = cloneModel('sam', 1);
     fitProp(root, 1.55);
     world.add(root);
-    playAnim(actions, 'Run_Gun') || playAnim(actions, 'Run');
+    playAnim(actions, ['Run_Gun', 'Run']);
     squad.push({ root, mixer, actions });
   }
   while (squad.length > want) {
@@ -510,19 +561,34 @@ function updateFloats(dt) {
   }
 }
 
+/** Only render nearest 1–2 gate pairs ahead (no horizon label stack). */
 function updateGateLabels() {
   const w = innerWidth, h = innerHeight;
+  const zNow = state ? state.z : 0;
+  const pairMap = new Map();
+  for (const g of gates) {
+    if (g.consumed || g.op === 'finish' || !g.visual?.userData?.labelEl) continue;
+    if (g.z < zNow - 1.5) continue;
+    const key = Math.round(g.z * 10) / 10;
+    if (!pairMap.has(key)) pairMap.set(key, []);
+    pairMap.get(key).push(g);
+  }
+  const nearestZs = [...pairMap.keys()].sort((a, b) => a - b).slice(0, 2);
+  const show = new Set(nearestZs);
+
   for (const g of gates) {
     const el = g.visual?.userData?.labelEl;
     if (!el) continue;
-    if (!running || g.consumed || g.op === 'finish' || g.visual.visible === false) {
+    const key = Math.round(g.z * 10) / 10;
+    const allowed = show.has(key) && !g.consumed && g.op !== 'finish' && g.visual.visible !== false && running;
+    if (!allowed) {
       el.style.display = 'none';
       continue;
     }
-    const world = new THREE.Vector3();
-    g.visual.getWorldPosition(world);
-    world.y += 1.35;
-    const v = world.project(camera);
+    const worldPos = new THREE.Vector3();
+    g.visual.getWorldPosition(worldPos);
+    worldPos.y += 1.35;
+    const v = worldPos.project(camera);
     if (v.z > 1) {
       el.style.display = 'none';
       continue;
@@ -536,8 +602,17 @@ function updateGateLabels() {
   }
 }
 
+function refreshStartCard() {
+  const lv = levels[levelIndex];
+  if (!lv) return;
+  startMeta.textContent = `第 ${lv.id} 关 · ${lv.name}`;
+  btnStart.textContent = `开始关卡 ${lv.id}`;
+  if (hudLevel) hudLevel.textContent = String(lv.id);
+}
+
 function resetRun() {
   mixers.length = 0;
+  level = levels[levelIndex];
   state = createLevelState(level);
   playerX = 0; targetX = 0; fireAcc = 0; shake = 0;
   bullets.splice(0).forEach(b => bulletGroup.remove(b.mesh));
@@ -548,7 +623,7 @@ function resetRun() {
   spawnPlayer();
   syncSquadCount();
   updateHud();
-  banner.textContent = '左右拖动 · 自动前进开火';
+  banner.textContent = `第 ${level.id} 关 · ${level.name}`;
   running = true;
   overlay.classList.add('hidden');
   settle.classList.add('hidden');
@@ -560,6 +635,7 @@ function updateHud() {
   hudFire.textContent = String(state.firepower);
   hudScore.textContent = String(state.score);
   hudProg.style.width = `${Math.floor(progress(state) * 100)}%`;
+  if (hudLevel) hudLevel.textContent = String(level?.id ?? 1);
 }
 
 function endGame(won) {
@@ -567,13 +643,24 @@ function endGame(won) {
   state.won = won;
   state.lost = !won;
   state.finished = true;
-  const stars = starRating(state);
-  document.getElementById('settleTitle').textContent = won ? '关卡结算' : '挑战失败';
-  document.getElementById('settleResult').textContent = won ? '胜利！' : '再冲一次';
-  document.getElementById('stars').textContent = '★'.repeat(stars) + '☆'.repeat(3 - stars) + '（占位）';
+  const stars = starRating(state, level);
+  document.getElementById('settleTitle').textContent = won ? `第 ${level.id} 关结算` : '挑战失败';
+  document.getElementById('settleResult').textContent = won ? (level.id >= 10 ? '通关终局！' : '胜利！') : '再冲一次';
+  const starHint = level.stars
+    ? `（通关1★ · 人数≥${level.stars.twoPeople}=2★ · 人数≥${level.stars.threePeople}+火力≥${level.stars.threeFirepower}=3★）`
+    : '';
+  document.getElementById('stars').textContent = '★'.repeat(stars) + '☆'.repeat(3 - stars);
+  document.getElementById('starHint').textContent = starHint;
   document.getElementById('settleScore').textContent = String(state.score);
   document.getElementById('settleKills').textContent = String(state.kills);
   document.getElementById('settlePeople').textContent = String(state.people);
+  document.getElementById('settleFire').textContent = String(state.firepower);
+
+  const hasNext = won && levelIndex < levels.length - 1;
+  btnNext.disabled = !hasNext;
+  btnNext.title = hasNext ? `进入第 ${levelIndex + 2} 关` : (won ? '已是最终关' : '通关后解锁下一关');
+  btnNext.textContent = hasNext ? `下一关 · 第 ${levelIndex + 2} 关` : (won ? '已通关全部关卡' : '下一关（未解锁）');
+  btnNext.classList.toggle('ghost', !hasNext);
   settle.classList.remove('hidden');
 }
 
@@ -614,48 +701,88 @@ canvas.addEventListener('pointermove', e => {
 canvas.addEventListener('pointerup', () => { drag = null; });
 canvas.addEventListener('pointercancel', () => { drag = null; });
 addEventListener('keydown', e => {
+  if (!level) return;
   if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') targetX = Math.max(-level.roadHalfWidth + 0.4, targetX - 0.6);
   if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') targetX = Math.min(level.roadHalfWidth - 0.4, targetX + 0.6);
 });
 
-document.getElementById('btnStart').onclick = () => resetRun();
+btnStart.onclick = () => resetRun();
 document.getElementById('btnRetry').onclick = () => resetRun();
+btnNext.onclick = () => {
+  if (btnNext.disabled) return;
+  if (levelIndex < levels.length - 1) {
+    levelIndex += 1;
+    refreshStartCard();
+    resetRun();
+  }
+};
 
 function update(dt) {
   if (!running) return;
   state.z += level.runSpeed * dt;
   playerX += (targetX - playerX) * Math.min(1, dt * 12);
 
-  // zombies walk toward player a bit
   for (const z of zombies) {
     if (z.dead) continue;
-    z.z -= 1.6 * dt;
+    z.z -= z.approachSpeed * dt;
     z.root.position.z = z.z;
     z.root.position.x += (z.x - z.root.position.x) * dt * 2;
     z.hitCooldown = Math.max(0, z.hitCooldown - dt);
-    // collision
-    if (Math.abs(z.z - state.z) < 0.9 && Math.abs(z.root.position.x - playerX) < 0.85) {
+
+    if (z.isBoss) {
+      z.attackAcc += dt;
+      if (z.attackAcc > 2.4 && Math.abs(z.z - state.z) < 14) {
+        z.attackAcc = 0;
+        playAnim(z.actions, ['Punch', 'Headbutt', 'Weapon']);
+        setTimeout(() => {
+          if (!z.dead) playAnim(z.actions, ['Flying_Idle', 'Idle', 'Walk']);
+        }, 600);
+        // Boss breath / swipe chip when close
+        if (Math.abs(z.z - state.z) < 4.5) {
+          const loss = z.mini ? 2 : 4;
+          state.people = Math.max(0, state.people - loss);
+          shake = Math.max(shake, 0.7);
+          spawnFloat(`-${loss}`, z.root.position.clone().setY(2.6), '#ff6b8a');
+          syncSquadCount();
+          updateHud();
+          if (state.people <= 0) {
+            banner.textContent = '被 Boss 击溃';
+            endGame(false);
+            return;
+          }
+        }
+      }
+      updateBossHpBar(z);
+    }
+
+    const hitR = z.isBoss ? 1.6 : 0.9;
+    const hitX = z.isBoss ? 1.35 : 0.85;
+    if (Math.abs(z.z - state.z) < hitR && Math.abs(z.root.position.x - playerX) < hitX) {
       state.people = collideCost(state.people, z.hp);
-      shake = Math.max(shake, 0.55);
+      shake = Math.max(shake, z.isBoss ? 0.85 : 0.55);
       spawnFloat(`-${Math.max(1, Math.ceil(z.hp / 2))}`, z.root.position.clone().setY(2), '#ff6b8a');
-      z.dead = true;
-      z.root.visible = false;
+      if (!z.isBoss) {
+        z.dead = true;
+        z.root.visible = false;
+      } else {
+        // Boss contact: knock player slightly and keep boss
+        z.z += 2.2;
+        playAnim(z.actions, ['Punch', 'Headbutt']);
+      }
       updateHud();
       syncSquadCount();
       if (state.people <= 0) {
-        banner.textContent = '人数归零 · 被僵尸撞到';
+        banner.textContent = z.isBoss ? '被 Boss 撞到' : '人数归零 · 被怪物撞到';
         endGame(false);
         return;
       }
     }
   }
 
-  // fire
   const fs = fireStats(state.people, state.firepower);
   fireAcc += dt;
   if (fireAcc >= fs.interval) tryFire();
 
-  // bullets
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     b.mesh.position.addScaledVector(b.dir, b.speed * dt);
@@ -667,7 +794,7 @@ function update(dt) {
         const next = shootGate(g, b.damage);
         Object.assign(g, next);
         g.visual.userData.redraw?.(g);
-        spawnFloat(g.op === 'mul' ? `×${g.value}` : `+${g.value}`, g.visual.position.clone().setY(2.2), '#ffe66d');
+        spawnFloat(gateLabelText(g), g.visual.position.clone().setY(2.2), '#ffe66d');
         hit = true;
         break;
       }
@@ -675,18 +802,30 @@ function update(dt) {
     if (!hit) {
       for (const z of zombies) {
         if (z.dead) continue;
-        if (Math.abs(b.mesh.position.z - z.z) < 0.7 && Math.abs(b.mesh.position.x - z.root.position.x) < 0.55) {
+        const zr = z.isBoss ? 1.1 : 0.7;
+        const xr = z.isBoss ? 1.0 : 0.55;
+        if (Math.abs(b.mesh.position.z - z.z) < zr && Math.abs(b.mesh.position.x - z.root.position.x) < xr) {
           const dmg = damageZombie(z, b.damage);
           Object.assign(z, dmg);
           spawnFloat(`-${b.damage}`, z.root.position.clone().setY(1.8), '#9cffb0');
+          updateBossHpBar(z);
           if (z.dead) {
             state.kills += 1;
-            state.score += 20 + b.damage * 2;
-            playAnim(z.actions, 'Death');
-            setTimeout(() => { z.root.visible = false; }, 500);
+            state.score += z.isBoss ? (200 + b.damage * 5) : (20 + b.damage * 2);
+            if (z.isBoss) {
+              state.bossDefeated = true;
+              banner.textContent = z.mini ? '迷你龙倒下！' : '巨龙倒下！';
+            }
+            playAnim(z.actions, ['Death']);
+            if (z.hpBar) z.hpBar.remove();
+            setTimeout(() => { z.root.visible = false; }, z.isBoss ? 900 : 500);
           } else {
-            playAnim(z.actions, 'HitReact');
-            setTimeout(() => playAnim(z.actions, 'Walk') || playAnim(z.actions, 'Run'), 350);
+            playAnim(z.actions, ['HitReact']);
+            setTimeout(() => {
+              if (!z.dead) {
+                playAnim(z.actions, z.isBoss ? ['Flying_Idle', 'Idle', 'Walk'] : ['Walk', 'Run', 'Idle']);
+              }
+            }, 350);
           }
           hit = true;
           break;
@@ -699,11 +838,18 @@ function update(dt) {
     }
   }
 
-  // pass gates
+  // Must defeat remaining boss before finish counts as win if still alive near finish
   for (const g of gates) {
     if (g.consumed) continue;
     if (g.op === 'finish') {
       if (state.z >= g.z) {
+        const liveBoss = zombies.some(z => z.isBoss && !z.dead);
+        if (liveBoss) {
+          // Hold player at finish gate until boss dies — soft fail if they linger without killing
+          state.z = Math.min(state.z, g.z);
+          banner.textContent = '先击败 Boss！';
+          continue;
+        }
         g.consumed = true;
         if (state.people >= (g.value || 8)) {
           state.score += 500 + state.people * 10;
@@ -719,25 +865,31 @@ function update(dt) {
     }
     if (state.z >= g.z && Math.abs(playerX - g.visual.position.x) < 1.55) {
       g.consumed = true;
-      const before = state.people;
+      const beforeP = state.people;
+      const beforeF = state.firepower;
       const next = applyGate(state.people, state.firepower, g);
       state.people = next.people;
       state.firepower = next.firepower;
-      state.score += 50 + Math.max(0, state.people - before) * 5;
+      state.score += 50 + Math.max(0, state.people - beforeP) * 5 + Math.max(0, state.firepower - beforeF) * 20;
       shake = Math.max(shake, 0.35);
-      spawnFloat(g.op === 'mul' ? `人数×${g.value}` : `人数+${g.value}`, g.visual.position.clone().setY(2.4), '#fff');
+      let msg = gateLabelText(g);
+      if (g.op === 'add' || g.op === 'mul') msg = `人数${gateLabelText(g)}`;
+      if (g.op === 'fire' || g.op === 'fireMul') msg = `火力${g.op === 'fireMul' ? '×' : '+'}${g.value}`;
+      spawnFloat(msg, g.visual.position.clone().setY(2.4), '#fff');
       g.visual.visible = false;
-      // hide sibling if any still ahead? keep other side
+      if (g.visual.userData.labelEl) g.visual.userData.labelEl.style.display = 'none';
       syncSquadCount();
       updateHud();
     } else if (state.z >= g.z + 1.2) {
       g.consumed = true;
       g.visual.visible = false;
+      if (g.visual.userData.labelEl) g.visual.userData.labelEl.style.display = 'none';
     }
   }
 
   if (state.z >= level.length + 5 && !state.finished) {
-    endGame(state.people > 0);
+    const liveBoss = zombies.some(z => z.isBoss && !z.dead);
+    endGame(!liveBoss && state.people > 0);
   }
 
   syncSquadCount();
@@ -751,15 +903,14 @@ function render() {
   update(dt);
 
   shake = Math.max(0, shake - dt * 1.8);
-  const camX = playerX * 0.7 + (Math.random() - 0.5) * shake;
-  // Lower / closer third-person so Sam + rifle stay fully in portrait frame.
-  const camY = 3.35 + (Math.random() - 0.5) * shake * 0.35;
-  const camZ = state ? state.z - 6.2 : -6.2;
+  const camX = playerX * 0.55 + (Math.random() - 0.5) * shake;
+  // PR2 camera: full Sam body + gun in portrait frame (not gun-row crop).
+  const camY = 2.75 + (Math.random() - 0.5) * shake * 0.3;
+  const camZ = state ? state.z - 7.5 : -7.5;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX * 0.35, 1.55, (state ? state.z : 0) + 6.5);
+  camera.lookAt(playerX * 0.25, 1.05, (state ? state.z : 0) + 5.8);
   camera.updateMatrixWorld();
 
-  // Project HUD after camera settles so +N/×N stick to gate panels.
   updateFloats(dt);
   updateGateLabels();
 
@@ -771,10 +922,11 @@ function render() {
 (async function boot() {
   try {
     setLoad(0.05, '读取关卡…');
-    await loadLevel();
+    await loadLevels();
     setLoad(0.1, '加载 glTF…');
     await loadAssets();
     setLoad(1, '就绪');
+    refreshStartCard();
     buildRoad(level.length);
     spawnFromLevel();
     spawnPlayer();
