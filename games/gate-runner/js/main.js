@@ -63,29 +63,40 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.35;
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec9ff);
 scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
-camera.position.set(0, 2.5, -6.5);
+camera.position.set(0, 3.0, -7.2);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.4, 0.96);
 composer.addPass(bloom);
 
-const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.35);
+const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.55);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xfff5e0, 2.1);
+const sun = new THREE.DirectionalLight(0xfff5e0, 1.75);
 sun.position.set(-8, 18, 6);
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
-sun.shadow.camera.left = -20; sun.shadow.camera.right = 20;
-sun.shadow.camera.top = 20; sun.shadow.camera.bottom = -10;
+sun.shadow.bias = -0.0002;
+sun.shadow.normalBias = 0.02;
+sun.shadow.camera.left = -24;
+sun.shadow.camera.right = 24;
+sun.shadow.camera.top = 24;
+sun.shadow.camera.bottom = -24;
+sun.shadow.camera.near = 1;
+sun.shadow.camera.far = 80;
+sun.shadow.camera.updateProjectionMatrix();
+// Target must live in the scene so matrix updates follow the runner.
+scene.add(sun.target);
 scene.add(sun);
-scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+const ambient = new THREE.AmbientLight(0xffffff, 0.65);
+scene.add(ambient);
 
 const world = new THREE.Group();
 scene.add(world);
@@ -265,9 +276,10 @@ function attachPrimitiveGun(root) {
   gun.add(barrel);
   gun.add(stock);
   // Fixed local pose on character root — never a bone.
-  gun.position.set(0.28, 1.05, 0.45);
-  gun.rotation.set(-0.05, 0.15, 0.05);
-  gun.scale.set(1, 1, 1);
+  // Slightly larger + more "held" so the orange/metal gun reads in portrait shots.
+  gun.position.set(0.32, 0.92, 0.55);
+  gun.rotation.set(-0.08, 0.18, 0.08);
+  gun.scale.setScalar(1.5);
   root.add(gun);
   return gun;
 }
@@ -277,7 +289,7 @@ function hideNearCameraOccluders() {
   const camPos = camera.position;
   const box = new THREE.Box3();
   const size = new THREE.Vector3();
-  const center = new THREE.Vector3();
+  const closest = new THREE.Vector3();
   const roots = [];
   if (world) roots.push(world);
   for (const s of squad) if (s?.root) roots.push(s.root);
@@ -290,11 +302,15 @@ function hideNearCameraOccluders() {
       box.setFromObject(o);
       if (box.isEmpty()) return;
       box.getSize(size);
-      box.getCenter(center);
       const diag = size.length();
-      const dist = center.distanceTo(camPos);
-      // Primary guard: close + large. Extra: any huge mesh within 4m.
-      if ((dist < 3 && diag > 2.5) || (dist < 4 && diag > 3)) {
+      // Closest point on AABB to camera (not center distance).
+      closest.set(
+        Math.min(Math.max(camPos.x, box.min.x), box.max.x),
+        Math.min(Math.max(camPos.y, box.min.y), box.max.y),
+        Math.min(Math.max(camPos.z, box.min.z), box.max.z)
+      );
+      const minDist = closest.distanceTo(camPos);
+      if (minDist < 2.2 && diag > 1.8) {
         o.visible = false;
       }
     });
@@ -349,12 +365,15 @@ function buildRoad(length) {
   const segLen = 8;
   const segs = Math.ceil(length / segLen) + 4;
   // Continuous asphalt underlay first — kills yellow void tears between glTF street tiles.
+  // Thin slab (h≈0.12) with top near y=0 so the road never reads as a tall dark block.
   const slab = new THREE.Mesh(
-    new THREE.BoxGeometry(level.roadHalfWidth * 2 + 4.2, 0.55, length + 48),
+    new THREE.BoxGeometry(level.roadHalfWidth * 2 + 4.2, 0.12, length + 48),
     new THREE.MeshStandardMaterial({ color: 0x5c636b, roughness: 0.92, metalness: 0.04 })
   );
-  slab.position.set(0, -0.22, length / 2);
+  slab.position.set(0, -0.06, length / 2);
+  slab.name = 'asphaltUnderlay';
   slab.receiveShadow = true;
+  slab.castShadow = false;
   roadGroup.add(slab);
 
   for (let i = 0; i < segs; i++) {
@@ -1008,6 +1027,14 @@ function update(dt) {
         z.z = state.z + 8.5;
         z.root.visible = true;
         z.root.rotation.y = Math.PI; // face camera / player
+        // Showcase packs sit ahead of Sam — disable castShadow so they don't paint
+        // a near-camera black slab on the road under the player's feet.
+        z.root.traverse(o => {
+          if (o.isMesh) {
+            o.userData._castShadowBeforeShowcase = o.castShadow;
+            o.castShadow = false;
+          }
+        });
         if (!z.showcaseScaled) {
           // Nudge toward ~2.2m readable height if still small.
           z.root.scale.multiplyScalar(1.12);
@@ -1024,6 +1051,12 @@ function update(dt) {
         if (z.showcaseT >= 1.6) {
           z.showcased = true;
           z.showcaseActive = false;
+          z.root.traverse(o => {
+            if (o.isMesh && '_castShadowBeforeShowcase' in o.userData) {
+              o.castShadow = o.userData._castShadowBeforeShowcase;
+              delete o.userData._castShadowBeforeShowcase;
+            }
+          });
           playAnim(z.actions, ['Walk', 'Run', 'Idle']);
         }
       } else if (z.spawnedVisible) {
@@ -1231,13 +1264,36 @@ function render() {
 
   shake = Math.max(0, shake - dt * 1.8);
   const z0 = state ? state.z : 0;
-  // Keep Sam framed 3s+: slightly higher / farther chase, look at torso.
+  // Raise/pull cam so lower FOV has less ground fill; look at torso.
   const camX = playerX * 0.08 + (Math.random() - 0.5) * shake * 0.25;
-  const camY = 2.5 + (Math.random() - 0.5) * shake * 0.12;
-  const camZ = z0 - 6.5;
+  const camY = 3.0 + (Math.random() - 0.5) * shake * 0.12;
+  const camZ = z0 - 7.2;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(playerX, 1.3, z0 + 0.4);
+  camera.lookAt(playerX, 1.35, z0 + 0.5);
   camera.updateMatrixWorld();
+
+  // Sun follows the runner so shadows don't stretch toward the camera from packs ahead.
+  sun.target.position.set(playerX, 0, z0);
+  sun.target.updateMatrixWorld();
+  sun.position.set(playerX - 8, 18, z0 + 6);
+  sun.shadow.camera.left = -24;
+  sun.shadow.camera.right = 24;
+  sun.shadow.camera.top = 24;
+  sun.shadow.camera.bottom = -24;
+  sun.shadow.camera.near = 1;
+  sun.shadow.camera.far = 80;
+  sun.shadow.camera.updateProjectionMatrix();
+
+  // Hide road/prop chunks that have fully passed behind the camera.
+  for (const child of roadGroup.children) {
+    if (child.name === 'asphaltUnderlay') {
+      child.visible = true;
+      continue;
+    }
+    child.updateWorldMatrix(true, false);
+    const bbox = new THREE.Box3().setFromObject(child);
+    child.visible = !(bbox.max.z < camZ - 2);
+  }
 
   // Re-ground Sam each frame so animation/sync never zeros Y.
   for (const s of squad) {
