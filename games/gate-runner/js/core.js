@@ -8,8 +8,25 @@ export const ENEMY_BULLET_X = 0.55;
 export const ENEMY_BULLET_Z = 0.7;
 export const BOSS_BODY_Z = 1.6;
 export const BOSS_BULLET_Z = 1.25;
-export const BOSS_STANDOFF = 14;
+/** Fight distance once the boss appears. Kept inside 16–22 the whole duel. */
+export const BOSS_RANGE_NEAR = 16;
+export const BOSS_RANGE_FAR = 22;
+export const BOSS_STANDOFF = 19;
 export const BOSS_LEASH_SECONDS = 8;
+/** Flat chip cadence. Four hits wipe an edge squad inside 12s; a serious squad lives through a 5–8s kill. */
+export const BOSS_STRIKE_INTERVAL = 2.2;
+/** World height tuned for the pulled-back portrait boss camera, not a ~2.3 safety squash. */
+export const BOSS_MINI_HEIGHT = 10.8;
+export const BOSS_FINALE_HEIGHT = 14;
+export const CAM_FOV = 50;
+export const CAM_BACK = 14;
+export const CAM_Y = 3.15;
+export const CAM_LOOK_Y = 1.25;
+export const CAM_LOOK_AHEAD = 0.6;
+export const BOSS_CAM_BACK = 17.5;
+export const BOSS_CAM_Y = 5.4;
+export const BOSS_CAM_LOOK_Y = 3.6;
+export const BOSS_CAM_LOOK_AHEAD = 7;
 export const GATE_VIS_X = 1.15;
 export const GATE_BULLET_X = 0.95;
 export const GATE_BULLET_Z = 0.55;
@@ -22,8 +39,11 @@ export const PLAYER_SMOOTH = 26;
 export const SERIOUS_LANE = 0.65;
 /** Squad ceiling when a level does not set `maxPeople`. */
 export const DEFAULT_MAX_PEOPLE = 80;
-/** add/sub/fire face numbers stay two digits. Width already saturates by value/20. */
-export const MAX_GATE_LINEAR = 99;
+/**
+ * add/sub/fire face numbers. Kept in a short band (~24–36) so a shot-up
+ * gate still reads as +24, not a smeared ±99. Width saturates by value/20.
+ */
+export const MAX_GATE_LINEAR = 28;
 /** mul / fireMul face numbers. Shooting may climb, never past this. */
 export const MAX_GATE_MUL = 5;
 
@@ -86,7 +106,7 @@ export function capPeople(people, level) {
   return n;
 }
 
-/** Face-number ceiling. mul/fireMul ≤ 5. add/sub/fire ≤ 99. Other ops stay ≥ 1. */
+/** Face-number ceiling. mul/fireMul ≤ 5. add/sub/fire ≤ MAX_GATE_LINEAR. Other ops stay ≥ 1. */
 export function clampGateValue(op, value) {
   const raw = Number.isFinite(value) ? value : 1;
   const n = Math.max(1, Math.floor(raw));
@@ -114,8 +134,9 @@ export function shootGate(gate, damage, rng = Math.random) {
   const hp = Math.max(0, (gate.hp ?? 0) - damage);
   let value = gate.value;
   if (gate.op === 'add' || gate.op === 'sub' || gate.op === 'fire') {
-    const bump = Math.max(1, Math.floor(Math.max(0, damage) / 2));
-    value = (gate.value || 1) + bump;
+    // +1 per connecting shot. floor(damage/2) used to run the digits to the
+    // cap before the squad reached the gate.
+    if (damage > 0) value = (gate.value || 1) + 1;
   } else if (gate.op === 'mul' || gate.op === 'fireMul') {
     if (damage > 0 && rng() < 0.15) value = (gate.value || 2) + 1;
   }
@@ -240,9 +261,14 @@ export function kindToAssetKey(kind) {
   }
 }
 
-export function enemyHeight(kind, isBoss = false, scaleHint = null) {
+export function enemyHeight(kind, isBoss = false, scaleHint = null, mini = false) {
+  if (isBoss || kind === 'dragon-evolved') {
+    const hinted = Number(scaleHint);
+    // 3.4 / 2.3 were camera-safety shrinks. Only an explicit tall hint is honored.
+    if (Number.isFinite(hinted) && hinted >= 8) return hinted;
+    return mini ? BOSS_MINI_HEIGHT : BOSS_FINALE_HEIGHT;
+  }
   if (scaleHint) return scaleHint;
-  if (isBoss || kind === 'dragon-evolved') return 2.8;
   switch (kind) {
     case 'big-arm': return 3.05;
     case 'orc': return 2.95;
@@ -391,18 +417,63 @@ export function betterGateSide(left, right, people, firepower, level = null) {
   return sr > sl ? 1 : -1;
 }
 
-/** Boss z stays in gun range once the runner is close. Never walks off to -Z. */
+/**
+ * Boss stays at its mark until the runner is 22m out, then appears on the
+ * 16–22m band and holds BOSS_STANDOFF. Never walks behind the gun to -Z.
+ */
 export function stepBossZ(bossZ, homeZ, playerZ, engaged, dt, strong = false) {
-  let on = engaged || (homeZ - playerZ) <= 36;
-  if (!on) return { z: homeZ, engaged: false };
-  const rate = strong ? 8 : 2.5;
+  const distHome = homeZ - playerZ;
+  const born = engaged || distHome <= BOSS_RANGE_FAR;
+  if (!born) return { z: homeZ, engaged: false, born: false };
   const stand = playerZ + BOSS_STANDOFF;
-  let z = bossZ + (stand - bossZ) * Math.min(1, dt * rate);
-  const minZ = playerZ + 8;
-  const maxZ = playerZ + 22;
+  const rate = strong ? 14 : 8;
+  let z = engaged ? bossZ + (stand - bossZ) * Math.min(1, dt * rate) : stand;
+  const minZ = playerZ + BOSS_RANGE_NEAR;
+  const maxZ = playerZ + BOSS_RANGE_FAR;
   if (z < minZ) z = minZ;
   if (z > maxZ) z = maxZ;
-  return { z, engaged: true };
+  return { z, engaged: true, born: true };
+}
+
+/** Centered boss breath covers both clamps (±playableLimit). */
+export function bossCoversLane(bossX, playerX, roadHalfWidth) {
+  const limit = playableLimit(roadHalfWidth);
+  const reach = limit + Math.abs(bossX || 0);
+  return Math.abs(playerX - (bossX || 0)) <= reach + 1e-4;
+}
+
+/**
+ * Portrait screen fraction of a boss of `height` standing `standoff` meters
+ * ahead of the runner. Matches THREE.PerspectiveCamera fov (vertical).
+ */
+export function portraitBossFraction(height, standoff, cam = null) {
+  const eyeY = cam?.y ?? BOSS_CAM_Y;
+  const eyeZ = -(cam?.back ?? BOSS_CAM_BACK);
+  const lookY = cam?.lookY ?? BOSS_CAM_LOOK_Y;
+  const lookZ = cam?.lookAhead ?? BOSS_CAM_LOOK_AHEAD;
+  const fov = cam?.fov ?? CAM_FOV;
+  let zx = 0 - 0;
+  let zy = eyeY - lookY;
+  let zz = eyeZ - lookZ;
+  const zl = Math.hypot(zx, zy, zz) || 1;
+  zx /= zl; zy /= zl; zz /= zl;
+  let xx = zz;
+  let xy = 0;
+  let xz = -zx;
+  const xl = Math.hypot(xx, xy, xz) || 1;
+  xx /= xl; xy /= xl; xz /= xl;
+  const yx = zy * xz - zz * xy;
+  const yy = zz * xx - zx * xz;
+  const yz = zx * xy - zy * xx;
+  const tan = Math.tan((fov * Math.PI / 180) / 2);
+  const ndcY = (wy, wz) => {
+    const py = wy - eyeY;
+    const pz = wz - eyeZ;
+    const vy = py * yy + pz * yz;
+    const vz = py * zy + pz * zz;
+    return (vy / -vz) / tan;
+  };
+  return Math.abs(ndcY(height, standoff) - ndcY(0, standoff)) / 2;
 }
 
 function mulberry32(seed) {
@@ -456,6 +527,13 @@ export function simulateLevel(level, policy = 'serious') {
   let lost = false;
   let reason = '';
   let t = 0;
+  let bossEngageT = null;
+  let bossKillT = null;
+  let bossWipeT = null;
+  let bossEngagePeople = 0;
+  let bossEngageFire = 0;
+  let bossMinDist = Infinity;
+  let bossMaxDist = -Infinity;
   const bullets = [];
   const enemies = [];
   const gates = [];
@@ -490,7 +568,8 @@ export function simulateLevel(level, policy = 'serious') {
     } else if (ev.type === 'boss') {
       enemies.push({
         x: 0, z: ev.z, homeZ: ev.z, hp: ev.hp, maxHp: ev.hp, dead: false,
-        approach: 0, isBoss: true, mini: !!ev.mini, engaged: false,
+        approach: 0, isBoss: true, mini: !!ev.mini, engaged: false, born: false,
+        strikeCd: BOSS_STRIKE_INTERVAL,
         kind: ev.kind || 'dragon-evolved'
       });
     } else if (ev.type === 'finish') {
@@ -546,9 +625,22 @@ export function simulateLevel(level, policy = 'serious') {
     for (const e of enemies) {
       if (e.dead) continue;
       if (e.isBoss) {
+        const wasBorn = e.born;
         const step = stepBossZ(e.z, e.homeZ, z, e.engaged, dt, holding);
         e.z = step.z;
         e.engaged = step.engaged;
+        e.born = step.born;
+        if (e.born && !wasBorn) e.strikeCd = BOSS_STRIKE_INTERVAL;
+        if (e.born && bossEngageT == null) {
+          bossEngageT = t;
+          bossEngagePeople = people;
+          bossEngageFire = firepower;
+        }
+        if (e.born) {
+          const dist = e.z - z;
+          if (dist < bossMinDist) bossMinDist = dist;
+          if (dist > bossMaxDist) bossMaxDist = dist;
+        }
       } else {
         e.z -= e.approach * dt;
       }
@@ -594,6 +686,7 @@ export function simulateLevel(level, policy = 'serious') {
       if (!hit) {
         for (const e of enemies) {
           if (e.dead) continue;
+          if (e.isBoss && !e.born) continue;
           const rad = enemyRadii(e, half);
           if (zHits(z0, b.z, e.z, rad.bulletZ) && Math.abs(b.x - e.x) < rad.bulletX) {
             const dmg = damageZombie(e, b.damage);
@@ -602,7 +695,10 @@ export function simulateLevel(level, policy = 'serious') {
             if (e.dead) {
               kills += 1;
               score += e.isBoss ? 200 : 20;
-              if (e.isBoss) score += 80;
+              if (e.isBoss) {
+                score += 80;
+                if (bossKillT == null) bossKillT = t;
+              }
             }
             hit = true;
             break;
@@ -614,11 +710,27 @@ export function simulateLevel(level, policy = 'serious') {
 
     for (const e of enemies) {
       if (e.dead) continue;
+      if (e.isBoss) {
+        if (!e.born) continue;
+        e.strikeCd -= dt;
+        if (e.strikeCd > 0 || !bossCoversLane(e.x, x, half)) continue;
+        e.strikeCd = BOSS_STRIKE_INTERVAL;
+        people = capPeople(collideCost(people, e.hp, { boss: true, mini: !!e.mini }), level);
+        if (people <= 0) {
+          people = capPeople(0, level);
+          lost = true;
+          won = false;
+          finished = true;
+          reason = 'dead';
+          if (bossWipeT == null) bossWipeT = t;
+          break;
+        }
+        continue;
+      }
       const rad = enemyRadii(e, half);
       if (Math.abs(e.z - z) < rad.bodyZ && Math.abs(e.x - x) < rad.bodyX) {
-        people = capPeople(collideCost(people, e.hp, { boss: !!e.isBoss, mini: !!e.mini }), level);
-        if (!e.isBoss) e.dead = true;
-        else e.z += 2.2;
+        people = capPeople(collideCost(people, e.hp, { boss: false, mini: false }), level);
+        e.dead = true;
         if (people <= 0) {
           people = capPeople(0, level);
           lost = true;
@@ -695,7 +807,15 @@ export function simulateLevel(level, policy = 'serious') {
     reason,
     t,
     bossHold,
-    need
+    need,
+    bossEngageT,
+    bossKillT,
+    bossWipeT,
+    bossEngagePeople,
+    bossEngageFire,
+    bossMinDist: Number.isFinite(bossMinDist) ? bossMinDist : null,
+    bossMaxDist: Number.isFinite(bossMaxDist) ? bossMaxDist : null,
+    bossFight: bossEngageT == null ? null : (bossKillT ?? bossWipeT ?? t) - bossEngageT
   };
 }
 
@@ -718,11 +838,18 @@ export function levelProblems(lv) {
   const gateZs = [...new Set((lv.events || []).filter(e => e.type === 'gatePair').map(e => e.z))].sort((a, b) => a - b);
   if (!gateZs.length) p.push('no gates');
   else {
-    const t0 = (gateZs[0] - BULLET_MAX_AHEAD) / lv.runSpeed;
-    if (!(t0 >= 2 && t0 <= 3.5)) p.push(`first gate shootable ${t0.toFixed(2)}`);
+    // Opening hook: the first gate and a zombie pack sit inside ~3s of road.
+    const reachT = gateZs[0] / lv.runSpeed;
+    if (!(reachT >= 1.5 && reachT <= 3.05)) p.push(`first gate reach ${reachT.toFixed(2)}`);
+    const openZ = lv.runSpeed * 3;
+    if (!(lv.events || []).some((e) => e.type === 'zombies' && e.z <= openZ + 0.05)) {
+      p.push('opening zombies');
+    }
     for (let i = 1; i < gateZs.length; i++) {
-      const gap = (gateZs[i] - gateZs[i - 1]) / lv.runSpeed;
-      if (!(gap >= 2 && gap <= 3.5)) p.push(`gate interval ${gap.toFixed(2)}`);
+      const meters = gateZs[i] - gateZs[i - 1];
+      const gap = meters / lv.runSpeed;
+      // 2.0–3.5s, and close enough that two boards read together (≤18.5m).
+      if (!(gap >= 2 - 1e-6 && gap <= 3.5 && meters <= 18.5)) p.push(`gate interval ${gap.toFixed(2)}`);
     }
     const pairs = (lv.events || []).filter(e => e.type === 'gatePair');
     if (!pairs.some(e => e.left?.op === 'sub' || e.right?.op === 'sub')) p.push('no sub');

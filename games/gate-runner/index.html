@@ -18,6 +18,7 @@
 <body>
   <div id="app">
     <canvas id="c"></canvas>
+    <div id="killFlash" aria-hidden="true"></div>
     <div id="gateLabels" aria-hidden="true"></div>
     <div id="hud">
       <div class="hud-row">
@@ -31,7 +32,7 @@
     </div>
     <button id="btnMute" type="button" aria-pressed="false">音效开</button>
 
-    <div id="overlay" class="overlay">
+    <div id="overlay" class="overlay overlay-start">
       <div class="card">
         <div class="eyebrow">PR2 · 十关战役</div>
         <h1>向末日开炮</h1>
