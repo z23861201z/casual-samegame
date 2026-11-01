@@ -1,61 +1,56 @@
-# Gate Runner · PR2 自测清单
+# Gate Runner · P0 验收步骤
 
-> 用于 PR 描述与人工验收。环境：仓库根目录 `python3 -m http.server 8080`，Chrome/Edge，竖屏或窄窗。
+这份清单替换旧的截图勾选。`selftest-shots*`、无头浏览器截图、`?debug=1` 的 min.y 都不能当作通过。旧镜头数字（`y=2.35`、`z-6.2`、`playerX * 0.08`）和「可见小队 ≤ 3」「14m 才显示、钉在前方 8.5m」已经作废。
 
-## 结构 / 门户
+P0 只覆盖跟手、关长、占道、星级、小队和音效。Bloom、城市重做、Boss 体型精修不在本单。
 
-- [ ] 根目录 `index.html` 为合集门户（左分类 / 中游玩 / 右推荐）
-- [ ] 门户推荐区仍同时列出 **Gate Runner** 与 **SameGame**
-- [ ] 门户可切换并 iframe 打开两款游戏
-- [ ] `games/samegame/` 可独立游玩
+## 开发先交
 
-## 十关 + 结算
+在仓库根目录跑：
 
-- [ ] 加载后开始关卡 1；胜利结算「下一关」可点并进入第 2 关
-- [ ] 失败时「下一关」仍禁用；重试回到当前关
-- [ ] 星级：通关至少 1★；人数/火力阈值影响 2★/3★（结算有阈值说明）
-- [ ] 第 10 关胜利文案体现终局通关；无「第 11 关」
+```bash
+node games/gate-runner/tests/core-test.mjs
+```
 
-## 怪物 / Boss
+日志里要有：
 
-- [ ] 可见 ≥6 种：Zombie、Zombie half、Big arm、Orc、Demon、Yeti
-- [ ] 第 5 关出现低血量迷你 Dragon Evolved（~2.2 高）；有攻击 / 受击 / 死亡动画反馈
-- [ ] 第 10 关全血 Dragon Evolved Boss（~3.2 高，远距生成）；击败后才能有效冲终点
-- [ ] 相关关卡至少有一波可读的「迎面僵尸/怪物」走进镜头（体型/时机明显）
-- [ ] 怪物站在路面上（Box3.min.y≈0），不是埋地 / 空路只涨击杀
+- 十条关卡 `levelProblems` 为空，测试进程退出码 0
+- 认真脚本每关 `won=true` 且 `stars=3`
+- 贴右（`edge`）和贴左（`edge-left`）每关 `won=false`
+- L1 时长 ≥ 18s，L10 时长在 22–30s，十关都在 15–30s
+- 故意把一关改成 `startPeople >= needPeople` 时，同一测试变红（测试内用副本断言，不改仓库文件）
 
-## PR1 跟进（PR2 hard-fail 修复）
+任一红，总监不开始手玩。
 
-- [ ] 竖屏第三人称：Sam **全身** 入画（hide bind-pose Axe/weapons；lead 右手 tiny primitive；无独立 rifle / 无 roadside barrel）
-  - Cam lock: `position (playerX*0.08, 2.35, state.z-6.2)` · `lookAt(playerX, 1.25, state.z+0.35)` · near=0.35 · fov=50
-  - Visible squad ≤3, side flanks only; re-ground `y=groundY` every frame; SkeletonUtils.clone
-  - Gate: nearest 1 pair HTML **and** 3D panels; combat floats single-slot (no `-2-2-2`)
-  - readableWave lazy-activate when event within 14m → pin `state.z+8.5` ≥1.6s, height ~2.2, fire hush + invuln
-  - Boss: mini≤1.8 / finale≤2.4, wingspan≤1.1×h; spawn `max(event.z, state.z+22)`; `?level=10` hide until z>8
-  - Road: street Z overlap + asphalt underlay; no barrel.glb props
-- [ ] 门数字标签只显示最近 **1 对**（远景 3D 面板一并隐藏）
-- [ ] 隐藏 QA：`?level=5` / `?level=10` 可直达 Boss 关；`?debug=1` 显示 cam + 首敌 min.y（及 `window.__grDbg`）
+## 当前操作（手玩对照）
 
-## 画面质量（录屏 / 广告）
+- 按住路面：每帧把路面左右边缘投影到屏幕，绝对映射到队长横向目标。松手停在原处。
+- A / D 与方向键：每次 0.45 世界单位，夹紧在 `±(roadHalfWidth - 0.4)`。正方向跟镜头矩阵的屏幕右，不跟世界 +X 的名字。
+- 镜头横向锚在道路中线（只加震屏），高度 3.15，在队长后方 14。跟手误差用屏幕上的队长和手指比，不用 `playerX * 0.08`。
+- 怪生成即可看见、可射击、可碰撞，脚底贴路。占道波 `block:"full"` 盖住两侧夹紧位。
+- Boss 活着时终点会把 Boss 拉回射程；8 秒内打不掉判负。不能在 Boss 存活时通关。
+- 星级：未通关 0；通关 1；通关且击杀达到敌人数 50%（向上取整）为 2；通关且人数、火力、击杀（70%）都过为 3。
+- 可见身体：1–3 同数；4–8 至少 5 具；9 人起 7–10 具，并在世界空间显示 `+N`。
+- 右上角「音效开 / 音效关」写入 `localStorage` 键 `gate-runner-muted`。第一下指针会恢复 AudioContext。
 
-- [ ] 非昏暗脏灰：天空/雾偏亮，门有 Bloom 自发光
-- [ ] 高架路面 + 警示边 + 城市远景可读
-- [ ] 中文 HUD 正常
+## 总监手玩
 
-## 资源 / 合规
+窗口 390×844。不看开发录的演示。L1、L5、L10 各三局：
 
-- [ ] `ATTRIBUTION.md` 含 Post Apocalypse + Ultimate Monsters CC0 与 poly.pizza 链接
-- [ ] `assets/gltf/` 含 orc / demon / yeti / dragon-evolved
-- [ ] `scripts/download-quaternius.sh` 可按 manifest 重下
+1. 认真选更高的那扇门，挡住的怪打完再走。必须胜。
+2. 开局贴左夹紧直到结束。必须负。
+3. 开局贴右夹紧直到结束。必须负。
 
-## 技术冒烟
+秒表从按下「开始」后再动的第一帧计到结算卡。菜单和结算不计入。脚本时长和手玩时长都要落在 15–30 秒（L1 ≥ 18，L5 ≥ 20，L10 为 22–30）。
 
-- [ ] `node games/gate-runner/tests/core-test.mjs` 通过
-- [ ] 浏览器控制台无持续报错（允许首屏 CDN 慢）
+同一三关再到门户 iframe 里各玩一局认真、一局贴边。跟手用路面 20%、50%、80% 三点各停 0.5 秒，再加一次约 200ms 的横扫。穿门和击杀必须出声。切到 SameGame 时本游戏的声音应停止（门户切页若仍出声，记在 P2 门户项，不拿截图目录抵）。
 
-## 残差风险
+## 成片
 
-- Sam/怪物朝向依赖 Quaternius 默认 +Z；若某资源朝向相反，需单资源覆写 `rotation.y`
-- 无 WebGL 截图时用 `?debug=1` 核对 grounding；总监录屏仍是最终验收
-- Boss 用 height fit + wingspan cap（≤height×1.1）；readableWave lazy pin 8.5m；Sam 武器网格默认隐藏
-- Headless SwiftShader 材质可能发灰/显瘦，不以无头浏览器截图替代总监验收
+未剪辑原片：L1 一条 15 秒，L5 或 L10 一条 30 秒，音开，9:16。对照 `docs/refs/doom-gates.jpg` 的五项（高架路面、黄黑警示边、超大发光数字、成团尸潮、脚下小队）。原片不过，整包打回。本单不重做城市和 Bloom。
+
+## 签字格
+
+每一格都要写：关卡、操作（认真 / 贴左 / 贴右）、胜负、秒数、击杀、可见身体数、有无空窗。缺一格不算签过。
+
+P0 有一条失败，P1 不得开工。合并条件是这份签字加上 `core-test` 绿。

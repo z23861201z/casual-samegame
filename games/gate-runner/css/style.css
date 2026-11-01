@@ -109,3 +109,17 @@ html, body { margin: 0; height: 100%; background: #6ea8ff; overflow: hidden; tou
   font-size: 10px; font-weight: 800; letter-spacing: .12em; color: #fff;
   text-shadow: 0 1px 3px #000;
 }
+#btnMute {
+  position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 10px; z-index: 8;
+  pointer-events: auto; appearance: none; border: 1px solid rgba(255,255,255,.28);
+  background: rgba(8,16,32,.55); color: #fff; border-radius: 999px;
+  padding: 8px 12px; font-size: 13px; font-weight: 700; cursor: pointer;
+}
+#btnMute[aria-pressed="true"] { background: rgba(80,20,30,.72); color: #ffd0d8; }
+.squad-plus {
+  position: absolute; left: 0; top: 0; transform: translate(-50%, -120%);
+  font-weight: 900; font-size: 28px; line-height: 1; color: #fff;
+  -webkit-text-stroke: 3px rgba(0,0,0,.9); paint-order: stroke fill;
+  text-shadow: 0 0 12px rgba(80,140,255,.85);
+  pointer-events: none; white-space: nowrap;
+}

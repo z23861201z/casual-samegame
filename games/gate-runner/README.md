@@ -20,9 +20,10 @@ python3 -m http.server 8080
 
 | 输入 | 作用 |
 |------|------|
-| 拖动 / 滑动 | 左右移动 |
-| ← → / A D | 左右微调 |
+| 按住路面 | 队长移到手指在路面上的位置，松手不回中 |
+| ← → / A D | 每次 0.45 世界单位，方向跟屏幕 |
 | 自动 | 前进与开火 |
+| 音效按钮 | 静音，刷新后仍记住 |
 
 ## 关卡概要
 
@@ -39,7 +40,7 @@ python3 -m http.server 8080
 | 9 | 冲刺补给 | 全种类 |
 | 10 | 终局 | 混编 + 全血 Dragon Evolved |
 
-星级：通关 1★；剩余人数达阈值 2★；人数+火力达阈值 3★（见 `data/levels.json` → `stars`）。
+星级：未通关 0★；通关 1★；通关且击杀达到敌人数 50%（向上取整）为 2★；通关且人数、火力、击杀（70%）都达到为 3★。只堆人数、不杀怪，最高 2★。
 
 ## 技术
 
@@ -56,6 +57,7 @@ games/gate-runner/
   css/style.css
   js/main.js
   js/core.js
+  js/audio.js
   data/levels.json
   data/level1.json      # L1 快照（兼容）
   assets/gltf/

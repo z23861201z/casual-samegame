@@ -1,81 +1,109 @@
 {
   "id": 1,
-  "name": "教程短关",
+  "name": "尸潮开门",
   "theme": "tutorial",
-  "length": 88,
-  "startPeople": 8,
+  "length": 180,
+  "startPeople": 6,
   "startFirepower": 1,
-  "runSpeed": 9.5,
+  "runSpeed": 9,
   "roadHalfWidth": 3.2,
   "stars": {
-    "twoPeople": 10,
-    "threePeople": 14,
-    "threeFirepower": 2
+    "threePeople": 16,
+    "threeFirepower": 3
   },
   "events": [
     {
-      "z": 14,
+      "z": 63.4,
       "type": "gatePair",
       "left": {
         "op": "add",
-        "value": 2,
-        "hp": 6
+        "value": 6,
+        "hp": 18
       },
       "right": {
-        "op": "add",
-        "value": 6,
+        "op": "sub",
+        "value": 2,
         "hp": 12
       }
     },
     {
-      "z": 28,
+      "z": 79.4,
       "type": "zombies",
-      "count": 2,
-      "hp": 2,
+      "count": 5,
+      "hp": 8,
       "kind": "zombie",
-      "spread": 1.8,
-      "readableWave": true
+      "block": "full"
     },
     {
-      "z": 42,
+      "z": 88.6,
       "type": "gatePair",
       "left": {
-        "op": "add",
-        "value": 4,
-        "hp": 10
+        "op": "fire",
+        "value": 2,
+        "hp": 20
       },
       "right": {
-        "op": "add",
-        "value": 1,
-        "hp": 6
+        "op": "sub",
+        "value": 3,
+        "hp": 12
       }
     },
     {
-      "z": 58,
+      "z": 104.6,
       "type": "zombies",
       "count": 3,
-      "hp": 3,
-      "kind": "zombie",
-      "spread": 2.2
+      "hp": 4,
+      "kind": "zombie-half",
+      "spread": 1.3
     },
     {
-      "z": 72,
+      "z": 113.8,
+      "type": "gatePair",
+      "left": {
+        "op": "mul",
+        "value": 2,
+        "hp": 22
+      },
+      "right": {
+        "op": "sub",
+        "value": 4,
+        "hp": 12
+      }
+    },
+    {
+      "z": 129.8,
+      "type": "zombies",
+      "count": 5,
+      "hp": 8,
+      "kind": "zombie",
+      "block": "full"
+    },
+    {
+      "z": 139,
       "type": "gatePair",
       "left": {
         "op": "add",
         "value": 8,
-        "hp": 14
+        "hp": 18
       },
       "right": {
-        "op": "add",
-        "value": 3,
-        "hp": 8
+        "op": "sub",
+        "value": 2,
+        "hp": 12
       }
     },
     {
-      "z": 84,
+      "z": 155,
+      "type": "zombies",
+      "count": 3,
+      "hp": 4,
+      "kind": "zombie",
+      "spread": 1.3
+    },
+    {
+      "z": 180,
       "type": "finish",
-      "needPeople": 6
+      "needPeople": 12
     }
   ]
 }
