@@ -9,9 +9,11 @@ import {
   starRating, createLevelState, progress, kindToAssetKey, enemyHeight,
   mapRoadPointer, nudgeLane, gateSideAtX, visibleBodyCount, squadPlusText,
   squadOffsets, fullBlockXs, spreadXs, enemyApproach, enemyRadii,
-  stepBossZ, capPeople, clampGateValue, GATE_VIS_X, GATE_BULLET_X, GATE_BULLET_Z,
+  stepBossZ, bossCoversLane, capPeople, clampGateValue, GATE_VIS_X, GATE_BULLET_X, GATE_BULLET_Z,
   BULLET_SPEED, BULLET_LIFE, BULLET_MAX_AHEAD,
-  BOSS_LEASH_SECONDS, PLAYER_SMOOTH, clampLane, twoKillsFor, threeKillsFor
+  BOSS_LEASH_SECONDS, BOSS_STRIKE_INTERVAL, PLAYER_SMOOTH, clampLane, twoKillsFor, threeKillsFor,
+  CAM_BACK, CAM_Y, CAM_LOOK_Y, CAM_LOOK_AHEAD,
+  BOSS_CAM_BACK, BOSS_CAM_Y, BOSS_CAM_LOOK_Y, BOSS_CAM_LOOK_AHEAD
 } from './core.js';
 import { createAudio } from './audio.js';
 
@@ -69,10 +71,8 @@ let bossIFrames = 0; // short invuln after boss bump
 let bossHold = 0;
 let holdingFinish = false;
 let ended = false;
+let bossCamBlend = 0;
 let clock = new THREE.Clock();
-const CAM_BACK = 14;
-const CAM_Y = 3.15;
-const CAM_LOOK_Y = 1.25;
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -328,6 +328,13 @@ function hideNearCameraOccluders() {
       if (!o.isMesh || o.visible === false) return;
       // Never hide the intentional bright gun.
       if (o.name === 'primitiveGun' || o.parent?.name === 'primitiveGun') return;
+      let bossMesh = false;
+      let p = o;
+      while (p) {
+        if (p.userData?.isBoss) { bossMesh = true; break; }
+        p = p.parent;
+      }
+      if (bossMesh) return;
       o.updateWorldMatrix(true, false);
       box.setFromObject(o);
       if (box.isEmpty()) return;
@@ -541,8 +548,8 @@ function buildRoad(length) {
   }
 }
 
-/** Scale only. Prefers height; falls back to max-axis if Y is tiny (avoids giant barrels/dragons). */
-function fitProp(root, targetHeight) {
+/** Scale only. Prefers height; falls back to max-axis if Y is tiny (avoids giant barrels). Bosses lock height. */
+function fitProp(root, targetHeight, opts = null) {
   const prev = root.position.clone();
   root.position.set(0, 0, 0);
   root.updateMatrixWorld(true);
@@ -554,12 +561,13 @@ function fitProp(root, targetHeight) {
     root.position.copy(prev);
     return { scale: 1, groundY: 0 };
   }
-  // Pathological flat/thin Y (rifle, some dragon rests) → scale by longest axis.
+  const lockHeight = !!(opts && opts.lockHeight);
+  // Pathological flat/thin Y (rifle) → scale by longest axis. Bosses never take that shrink.
   let s;
-  if (size.y < 1e-3 || size.y < maxAxis * 0.12 || (targetHeight / Math.max(size.y, 1e-6)) > 12) {
+  if (!lockHeight && (size.y < 1e-3 || size.y < maxAxis * 0.12 || (targetHeight / Math.max(size.y, 1e-6)) > 12)) {
     s = targetHeight / maxAxis;
   } else {
-    s = targetHeight / size.y;
+    s = targetHeight / Math.max(size.y, 1e-4);
   }
   root.scale.setScalar(s);
   root.updateMatrixWorld(true);
@@ -719,8 +727,9 @@ function spawnEnemy(ev, i, count, forcedX = null) {
   const assetKey = kindToAssetKey(kind);
   const bossLike = ev.type === 'boss' || (kind === 'dragon-evolved' && ev.hp >= 40);
   const { root, mixer, actions } = cloneModel(assetKey, 1);
-  const height = enemyHeight(kind, !!bossLike, ev.scale || null);
-  fitProp(root, height);
+  const height = enemyHeight(kind, !!bossLike, ev.scale || null, !!ev.mini);
+  fitProp(root, height, { lockHeight: !!bossLike });
+  if (bossLike) root.userData.isBoss = true;
   const x = forcedX == null
     ? (count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * (ev.spread || 2.2))
     : forcedX;
@@ -741,7 +750,7 @@ function spawnEnemy(ev, i, count, forcedX = null) {
     x, z, homeZ: z, groundY,
     dead: false, hitCooldown: 0,
     kind, isBoss: !!bossLike, mini: !!ev.mini,
-    engaged: false,
+    engaged: false, born: false, strikeCd: BOSS_STRIKE_INTERVAL,
     approachSpeed: enemyApproach(ev, level.runSpeed),
     animToken: 0, corpseT: 0, hpBar: null
   };
@@ -763,7 +772,7 @@ function syncBossHpBarVisibility() {
   const bosses = zombies.filter(z => z.isBoss && !z.dead);
   for (const z of bosses) {
     const dist = Math.abs((z.z ?? 0) - (state?.z ?? 0));
-    const show = !!(running && state && z.root?.visible !== false && dist < 40);
+    const show = !!(running && state && z.born && z.root?.visible !== false && dist < 40);
     if (show) {
       if (!z.hpBar) z.hpBar = makeBossHpBar();
       z.hpBar.style.display = '';
@@ -1117,6 +1126,7 @@ function resetRun() {
   level = levels[levelIndex];
   state = createLevelState(level);
   playerX = 0; targetX = 0; fireAcc = 0; shake = 0; shakeAmp = 0; shakeLeft = 0; shakeDur = 0; bossIFrames = 0;
+  bossCamBlend = 0;
   clearParticles();
   bullets.splice(0).forEach(b => bulletGroup.remove(b.mesh));
   while (bulletGroup.children.length) bulletGroup.remove(bulletGroup.children[0]);
@@ -1197,14 +1207,23 @@ function onResize() {
 }
 addEventListener('resize', onResize);
 
-/** Camera sits on the road centerline. Lateral aim is the runner, so the finger and the body share one screen x. */
-function poseCamera() {
+/** Chase cam, pulled back while a boss is on screen so the tall model stays in frame. */
+function poseCamera(dt = 0) {
+  const liveBoss = zombies.some(z => z.isBoss && z.born && (!z.dead || (z.corpseT || 0) > 0));
+  const aim = liveBoss ? 1 : 0;
+  bossCamBlend += (aim - bossCamBlend) * Math.min(1, Math.max(0, dt) * 4);
+  if (!liveBoss && bossCamBlend < 0.001) bossCamBlend = 0;
+  const u = bossCamBlend;
+  const back = CAM_BACK + (BOSS_CAM_BACK - CAM_BACK) * u;
+  const camHeight = CAM_Y + (BOSS_CAM_Y - CAM_Y) * u;
+  const lookY = CAM_LOOK_Y + (BOSS_CAM_LOOK_Y - CAM_LOOK_Y) * u;
+  const lookAhead = CAM_LOOK_AHEAD + (BOSS_CAM_LOOK_AHEAD - CAM_LOOK_AHEAD) * u;
   const z0 = state ? state.z : 0;
   const camX = (Math.random() - 0.5) * shake * 0.25;
-  const camY = CAM_Y + (Math.random() - 0.5) * shake * 0.12;
-  const camZ = z0 - CAM_BACK;
+  const camY = camHeight + (Math.random() - 0.5) * shake * 0.12;
+  const camZ = z0 - back;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(camX, CAM_LOOK_Y, z0 + 0.6);
+  camera.lookAt(camX, lookY, z0 + lookAhead);
   camera.updateMatrixWorld();
   return { camX, camY, camZ };
 }
@@ -1290,16 +1309,19 @@ function update(dt) {
   for (const z of zombies) {
     if (z.dead) continue;
     if (z.isBoss) {
+      const wasBorn = z.born;
       const step = stepBossZ(z.z, z.homeZ ?? z.z, state.z, z.engaged, dt, holdingFinish);
       z.z = step.z;
       z.engaged = step.engaged;
+      z.born = step.born;
+      if (z.born && !wasBorn) z.strikeCd = BOSS_STRIKE_INTERVAL;
     } else {
       z.z -= z.approachSpeed * dt;
     }
     z.root.position.x = z.x;
     z.root.position.z = z.z;
     z.root.position.y = z.groundY ?? 0;
-    z.root.visible = true;
+    z.root.visible = z.isBoss ? !!z.born : true;
     z.hitCooldown = Math.max(0, z.hitCooldown - dt);
   }
 
@@ -1329,7 +1351,7 @@ function update(dt) {
     }
     if (!hit) {
       for (const z of zombies) {
-        if (z.dead) continue;
+        if (z.dead || (z.isBoss && !z.born)) continue;
         const rad = enemyRadii(z, level.roadHalfWidth);
         if (zSpanHits(z0, b.z, z.z, rad.bulletZ) && Math.abs(b.x - z.x) < rad.bulletX) {
           const dmg = damageZombie(z, b.damage);
@@ -1371,9 +1393,31 @@ function update(dt) {
 
   for (const z of zombies) {
     if (z.dead) continue;
+    if (z.isBoss) {
+      if (!z.born) continue;
+      z.strikeCd = (z.strikeCd ?? BOSS_STRIKE_INTERVAL) - dt;
+      if (z.strikeCd > 0 || !bossCoversLane(z.x, playerX, level.roadHalfWidth)) continue;
+      z.strikeCd = BOSS_STRIKE_INTERVAL;
+      const before = state.people;
+      state.people = capPeople(collideCost(state.people, z.hp, { boss: true, mini: !!z.mini }), level);
+      const lost = Math.max(0, before - state.people);
+      addShake(0.7, 0.16);
+      if (lost > 0) {
+        audio.playLosePeople();
+        spawnFloat(`-${lost}`, new THREE.Vector3(playerX, 2.1, state.z + 1.2), '#ff6b8a');
+        spawnBurst(playerX, 1.5, state.z, 0xff3b5c, 10, 0.48);
+        playReaction(z, ['Headbutt', 'Punch'], ['Flying_Idle', 'Idle', 'Walk']);
+      }
+      updateHud();
+      syncSquadCount();
+      if (state.people <= 0) {
+        banner.textContent = '被 Boss 撞到';
+        endGame(false);
+        return;
+      }
+      continue;
+    }
     const rad = enemyRadii(z, level.roadHalfWidth);
-    const canHit = z.isBoss ? (bossIFrames <= 0 && z.hitCooldown <= 0) : true;
-    if (!canHit) continue;
     if (Math.abs(z.z - state.z) < rad.bodyZ && Math.abs(z.x - playerX) < rad.bodyX) {
       const before = state.people;
       state.people = capPeople(collideCost(state.people, z.hp, { boss: !!z.isBoss, mini: !!z.mini }), level);
@@ -1384,19 +1428,11 @@ function update(dt) {
         spawnFloat(`-${lost}`, new THREE.Vector3(z.x, 2, z.z), '#ff6b8a');
         spawnBurst(playerX, 1.5, state.z, 0xff3b5c, 10, 0.48);
       }
-      if (!z.isBoss) {
-        playDeath(z);
-      } else {
-        z.z += 2.2;
-        z.root.position.z = z.z;
-        bossIFrames = z.mini ? 1.0 : 0.85;
-        z.hitCooldown = bossIFrames;
-        playReaction(z, ['Punch', 'Headbutt', 'Weapon'], ['Flying_Idle', 'Idle', 'Walk']);
-      }
+      playDeath(z);
       updateHud();
       syncSquadCount();
       if (state.people <= 0) {
-        banner.textContent = z.isBoss ? '被 Boss 撞到' : '人数归零 · 被怪物撞到';
+        banner.textContent = '人数归零 · 被怪物撞到';
         endGame(false);
         return;
       }
@@ -1479,7 +1515,7 @@ function render() {
   stepCorpses(dt);
   updateParticles(dt);
   decayShake(dt);
-  const { camX, camY, camZ } = poseCamera();
+  const { camX, camY, camZ } = poseCamera(dt);
 
   const z0 = state ? state.z : 0;
   sun.target.position.set(playerX, 0, z0);

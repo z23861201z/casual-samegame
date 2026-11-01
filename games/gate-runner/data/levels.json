@@ -555,8 +555,8 @@
         "z": 144,
         "type": "boss",
         "kind": "dragon-evolved",
-        "hp": 420,
-        "scale": 3.1,
+        "hp": 16000,
+        "scale": 10.8,
         "mini": true
       },
       {
@@ -1202,8 +1202,8 @@
         "z": 171,
         "type": "boss",
         "kind": "dragon-evolved",
-        "hp": 680,
-        "scale": 3.4,
+        "hp": 32000,
+        "scale": 14,
         "mini": false
       },
       {

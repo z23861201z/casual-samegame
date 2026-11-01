@@ -6,7 +6,9 @@ import {
   twoKillsFor, threeKillsFor, levelProblems, simulateLevel, durationSeconds, finishNeed,
   closeWindowSeconds, countEnemies,
   capPeople, maxPeopleFor, clampGateValue,
-  DEFAULT_MAX_PEOPLE, MAX_GATE_LINEAR, MAX_GATE_MUL
+  DEFAULT_MAX_PEOPLE, MAX_GATE_LINEAR, MAX_GATE_MUL,
+  portraitBossFraction, bossCoversLane, playableLimit,
+  BOSS_MINI_HEIGHT, BOSS_FINALE_HEIGHT, BOSS_STANDOFF, BOSS_RANGE_NEAR, BOSS_RANGE_FAR
 } from '../js/core.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -129,6 +131,17 @@ assert(progress(createLevelState({ startPeople: 1, startFirepower: 1, length: 10
 assert(kindToAssetKey('dragon-evolved') === 'dragonEvolved', 'kind map');
 assert(kindToAssetKey('orc') === 'orc', 'orc map');
 assert(enemyHeight('yeti') > enemyHeight('zombie-half'), 'yeti taller');
+assert(enemyHeight('dragon-evolved', true, 2.3, false) === BOSS_FINALE_HEIGHT, 'finale ignores 2.3 squash');
+assert(enemyHeight('dragon-evolved', true, 3.4, true) === BOSS_MINI_HEIGHT, 'mini ignores safety scale');
+assert(BOSS_FINALE_HEIGHT > 8 && BOSS_MINI_HEIGHT > 8, 'boss world height stays tall');
+assert(BOSS_STANDOFF >= BOSS_RANGE_NEAR && BOSS_STANDOFF <= BOSS_RANGE_FAR, 'standoff inside 16-22');
+assert(bossCoversLane(0, playableLimit(3.2), 3.2) && bossCoversLane(0, -playableLimit(3.2), 3.2), 'boss covers both clamps');
+for (const d of [BOSS_RANGE_NEAR, BOSS_STANDOFF, BOSS_RANGE_FAR]) {
+  const miniF = portraitBossFraction(BOSS_MINI_HEIGHT, d);
+  const finF = portraitBossFraction(BOSS_FINALE_HEIGHT, d);
+  assert(miniF >= 0.28 && miniF <= 0.40, `mini screen fraction @${d} ${miniF.toFixed(3)}`);
+  assert(finF >= 0.35 && finF <= 0.50, `finale screen fraction @${d} ${finF.toFixed(3)}`);
+}
 assert(closeWindowSeconds(9) === 0.8, 'close window');
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -162,6 +175,8 @@ for (const k of ['zombie', 'zombie-half', 'big-arm', 'orc', 'demon', 'yeti', 'dr
 assert(hasMini && hasFinale, 'mini + finale boss');
 assert(levels[4].id === 5 && levels[4].events.some(e => e.type === 'boss'), 'L5 boss');
 assert(levels[9].id === 10 && levels[9].events.some(e => e.type === 'boss' && !e.mini), 'L10 boss');
+assert(levels[4].events.find(e => e.type === 'boss').scale === BOSS_MINI_HEIGHT, 'L5 boss scale');
+assert(levels[9].events.find(e => e.type === 'boss').scale === BOSS_FINALE_HEIGHT, 'L10 boss scale');
 
 const l1 = levels[0];
 const two = twoKillsFor(l1);
@@ -208,6 +223,18 @@ for (const lv of levels) {
   assert(edge.people <= cap && edgeLeft.people <= cap, `edge L${lv.id} people over cap`);
   assert(!edge.won && edge.stars === 0, `edge L${lv.id} won=${edge.won} reason=${edge.reason}`);
   assert(!edgeLeft.won && edgeLeft.stars === 0, `edge-left L${lv.id} won=${edgeLeft.won} reason=${edgeLeft.reason}`);
+  if (lv.id === 5 || lv.id === 10) {
+    const killT = serious.bossKillT - serious.bossEngageT;
+    assert(killT >= 5 && killT <= 8, `serious L${lv.id} boss kill ${killT}`);
+    const wipeT = edge.bossWipeT - edge.bossEngageT;
+    const wipeL = edgeLeft.bossWipeT - edgeLeft.bossEngageT;
+    assert(edge.bossKillT == null && wipeT > 0 && wipeT <= 12, `edge L${lv.id} wipe ${wipeT}`);
+    assert(edgeLeft.bossKillT == null && wipeL > 0 && wipeL <= 12, `edge-left L${lv.id} wipe ${wipeL}`);
+    for (const run of [serious, edge, edgeLeft]) {
+      assert(run.bossMinDist >= BOSS_RANGE_NEAR - 1e-3 && run.bossMaxDist <= BOSS_RANGE_FAR + 1e-3,
+        `L${lv.id} boss left the 16-22 band ${run.bossMinDist}..${run.bossMaxDist}`);
+    }
+  }
   rows.push({
     id: lv.id,
     dur: +dur.toFixed(2),
@@ -238,6 +265,9 @@ assert(applySrc.includes('capPeople('), 'applyGate caps people');
 assert(shootSrc.includes('clampGateValue'), 'shootGate caps face numbers');
 assert(createSrc.includes('capPeople('), 'createLevelState caps people');
 assert(mainSrc.includes('capPeople(collideCost'), 'main collide uses capPeople');
+assert(mainSrc.includes('BOSS_CORPSE_DUR = 0.72'), 'boss corpse hold stays 0.72');
+assert(mainSrc.includes('bossCoversLane'), 'main boss threat covers the lane');
+assert(mainSrc.includes('BOSS_CAM_BACK'), 'boss camera pulls back');
 assert(mainSrc.includes('capPeople(next.people'), 'main gate uses capPeople');
 assert(mainSrc.includes('shownPeople'), 'HUD reads the capped count');
 for (const banned of ['readableWave', 'showcaseHold', 'setTimeout', 'playerX * 0.08', 'clientX / innerWidth', 'innerWidth) * 2']) {
