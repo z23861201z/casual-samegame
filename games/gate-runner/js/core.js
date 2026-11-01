@@ -834,11 +834,18 @@ export function levelProblems(lv) {
   const gateZs = [...new Set((lv.events || []).filter(e => e.type === 'gatePair').map(e => e.z))].sort((a, b) => a - b);
   if (!gateZs.length) p.push('no gates');
   else {
-    const t0 = (gateZs[0] - BULLET_MAX_AHEAD) / lv.runSpeed;
-    if (!(t0 >= 2 && t0 <= 3.5)) p.push(`first gate shootable ${t0.toFixed(2)}`);
+    // Opening hook: the first gate and a zombie pack sit inside ~3s of road.
+    const reachT = gateZs[0] / lv.runSpeed;
+    if (!(reachT >= 1.5 && reachT <= 3.05)) p.push(`first gate reach ${reachT.toFixed(2)}`);
+    const openZ = lv.runSpeed * 3;
+    if (!(lv.events || []).some((e) => e.type === 'zombies' && e.z <= openZ + 0.05)) {
+      p.push('opening zombies');
+    }
     for (let i = 1; i < gateZs.length; i++) {
-      const gap = (gateZs[i] - gateZs[i - 1]) / lv.runSpeed;
-      if (!(gap >= 2 && gap <= 3.5)) p.push(`gate interval ${gap.toFixed(2)}`);
+      const meters = gateZs[i] - gateZs[i - 1];
+      const gap = meters / lv.runSpeed;
+      // 2.0–3.5s, and close enough that two boards read together (≤18.5m).
+      if (!(gap >= 2 - 1e-6 && gap <= 3.5 && meters <= 18.5)) p.push(`gate interval ${gap.toFixed(2)}`);
     }
     const pairs = (lv.events || []).filter(e => e.type === 'gatePair');
     if (!pairs.some(e => e.left?.op === 'sub' || e.right?.op === 'sub')) p.push('no sub');

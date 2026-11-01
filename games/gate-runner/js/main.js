@@ -79,13 +79,13 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.12;
+renderer.toneMappingExposure = 1.02;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x6490c0);
-scene.fog = new THREE.Fog(0x6e97c4, 34, 120);
+scene.background = new THREE.Color(0x5d86ad);
+scene.fog = new THREE.Fog(0x6a90b6, 20, 82);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
 camera.position.set(0, CAM_Y, -CAM_BACK);
@@ -131,13 +131,15 @@ const burstGeo = new THREE.SphereGeometry(0.09, 6, 5);
 const particles = [];
 const FX_CAP = 120;
 const KILL_SHAKE_AMP = 0.46;
-const KILL_SHAKE_DUR = 0.12;
+const KILL_SHAKE_DUR = 0.15;
 const BOSS_KILL_SHAKE_AMP = 1.04;
 const BOSS_KILL_SHAKE_DUR = 0.18;
-const CORPSE_DUR = 0.48;
+const CORPSE_DUR = 0.66;
 const BOSS_CORPSE_DUR = 0.72;
 const GATE_BOARDS_AHEAD = 3;
 const GATE_AHEAD_MAX = 90;
+const GATE_BURST_COUNT = 18;
+const CITY_SEED = 20261101;
 
 const city = buildCity();
 scene.add(city);
@@ -331,7 +333,7 @@ function hideNearCameraOccluders() {
       let bossMesh = false;
       let p = o;
       while (p) {
-        if (p.userData?.isBoss) { bossMesh = true; break; }
+        if (p.userData?.isBoss || p.userData?.isFoe) { bossMesh = true; break; }
         p = p.parent;
       }
       if (bossMesh) return;
@@ -423,7 +425,6 @@ function playDeath(enemy) {
   }
   afterClip(enemy, act, () => {
     enemy.clipDone = true;
-    if (enemy.corpseT <= 0 && enemy.root) enemy.root.visible = false;
   });
 }
 
@@ -442,38 +443,70 @@ function stepCorpses(dt) {
       z.root.position.z = z.knockFromZ + (z.knockZ || 0) * ease;
       z.root.position.y = z.knockFromY + Math.sin(u * Math.PI) * (z.isBoss ? 0.42 : 0.28);
       z.root.rotation.x = -1.15 * ease;
-      if (z.corpseT <= 0 && z.clipDone) z.root.visible = false;
-    } else if (z.clipDone) {
+      if (z.corpseT <= 0) z.root.visible = false;
+    } else {
       z.root.visible = false;
     }
   }
 }
 
+function cityRng(seed) {
+  let a = seed >>> 0;
+  return function rand() {
+    a |= 0;
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 function buildCity() {
+  const rand = cityRng(CITY_SEED);
   const g = new THREE.Group();
-  g.position.y = -18;
+  // Deck sits at y=0. This drop plus the side towers reads as an elevated highway.
+  g.position.y = -36;
   const geo = new THREE.BoxGeometry(1, 1, 1);
-  for (let i = 0; i < 60; i++) {
-    const h = 6 + Math.random() * 18;
+  for (let i = 0; i < 84; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const rank = rand() < 0.42 ? 0 : 1;
+    const lateral = 22 + rank * 16 + rand() * 10;
+    const h = rank === 0 ? (8 + rand() * 12) : (18 + rand() * 26);
     const m = new THREE.Mesh(
       geo,
       new THREE.MeshStandardMaterial({
-        color: new THREE.Color().setHSL(0.58, 0.15, 0.45 + Math.random() * 0.2),
-        roughness: 0.85,
+        color: new THREE.Color().setHSL(0.58 + rand() * 0.05, 0.1 + rand() * 0.1, 0.26 + rand() * 0.2),
+        roughness: 0.9,
         metalness: 0.05
       })
     );
-    const side = i % 2 === 0 ? -1 : 1;
-    m.scale.set(3 + Math.random() * 4, h, 3 + Math.random() * 5);
-    m.position.set(side * (14 + Math.random() * 22), h / 2, Math.random() * 140 - 20);
+    const x = side * lateral;
+    const z = -40 + i * 4.7 + rand() * 2.4;
+    m.scale.set(3.4 + rand() * 5.2, h, 3.4 + rand() * 5.8);
+    m.position.set(x, h / 2, z);
+    m.receiveShadow = true;
     g.add(m);
+    if (rand() > 0.35) {
+      const win = new THREE.Mesh(
+        geo,
+        new THREE.MeshStandardMaterial({
+          color: 0xffe2b0,
+          emissive: 0xc4883a,
+          emissiveIntensity: 0.22,
+          roughness: 0.45
+        })
+      );
+      win.scale.set(Math.max(0.6, m.scale.x * 0.42), 0.28 + rand() * 0.35, 0.12);
+      win.position.set(x, h * (0.35 + rand() * 0.35), z);
+      g.add(win);
+    }
   }
   const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(200, 220),
-    new THREE.MeshStandardMaterial({ color: 0x8fa9c4, roughness: 1 })
+    new THREE.PlaneGeometry(460, 560),
+    new THREE.MeshStandardMaterial({ color: 0x1c2838, roughness: 1 })
   );
   ground.rotation.x = -Math.PI / 2;
-  ground.position.y = 0.01;
+  ground.position.y = 0.02;
   g.add(ground);
   return g;
 }
@@ -511,19 +544,33 @@ function buildRoad(length) {
     root.position.set(0, -box2.min.y + 0.02, i * segLen + segLen * 0.5);
     roadGroup.add(root);
 
+    const zMid = i * segLen + segLen * 0.5;
+    const flip = i % 2 === 0 ? 1 : -1;
     for (const side of [-1, 1]) {
-      const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.18, segLen * 1.02),
-        new THREE.MeshStandardMaterial({ color: side < 0 ? 0xffd400 : 0x222222, emissive: 0x332200, emissiveIntensity: 0.2 })
+      const yellow = new THREE.Mesh(
+        new THREE.BoxGeometry(0.46, 0.26, segLen * 0.5),
+        new THREE.MeshStandardMaterial({ color: 0xffd000, emissive: 0xffb000, emissiveIntensity: 0.55, roughness: 0.4 })
       );
-      strip.position.set(side * (level.roadHalfWidth + 0.15), 0.12, i * segLen + segLen * 0.5);
-      roadGroup.add(strip);
-      const strip2 = new THREE.Mesh(
-        new THREE.BoxGeometry(0.32, 0.18, segLen * 1.02),
-        new THREE.MeshStandardMaterial({ color: side < 0 ? 0x222222 : 0xffd400, emissive: 0x221100, emissiveIntensity: 0.15 })
+      const black = new THREE.Mesh(
+        new THREE.BoxGeometry(0.46, 0.26, segLen * 0.5),
+        new THREE.MeshStandardMaterial({ color: 0x121212, roughness: 0.72, metalness: 0.04 })
       );
-      strip2.position.set(side * (level.roadHalfWidth + 0.5), 0.12, i * segLen + segLen * 0.5);
-      roadGroup.add(strip2);
+      const lip = side * (level.roadHalfWidth + 0.34);
+      yellow.position.set(lip, 0.18, zMid - flip * segLen * 0.25);
+      black.position.set(lip, 0.18, zMid + flip * segLen * 0.25);
+      roadGroup.add(yellow);
+      roadGroup.add(black);
+    }
+    if (i % 2 === 0) {
+      for (const side of [-1, 1]) {
+        const pillar = new THREE.Mesh(
+          new THREE.BoxGeometry(0.62, 18, 0.62),
+          new THREE.MeshStandardMaterial({ color: 0x3a4450, roughness: 0.88, metalness: 0.06 })
+        );
+        pillar.position.set(side * (level.roadHalfWidth + 1.15), -9.05, zMid);
+        pillar.castShadow = true;
+        roadGroup.add(pillar);
+      }
     }
 
     if (i % 2 === 0) {
@@ -638,7 +685,7 @@ function makeGateVisual(gate, side) {
   const mat = new THREE.MeshStandardMaterial({
     color: colors.color,
     emissive: colors.emissive,
-    emissiveIntensity: 1.35,
+    emissiveIntensity: 0.46,
     transparent: true,
     opacity: 0.88,
     roughness: 0.35,
@@ -652,10 +699,9 @@ function makeGateVisual(gate, side) {
   const frameMat = new THREE.MeshStandardMaterial({
     color: colors.frame,
     emissive: colors.frame,
-    emissiveIntensity: 2.6,
+    emissiveIntensity: 0.72,
     roughness: 0.32,
-    metalness: 0.04,
-    toneMapped: false
+    metalness: 0.04
   });
   frameMat.fog = false;
   const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 2.58, 0.14), frameMat);
@@ -664,11 +710,10 @@ function makeGateVisual(gate, side) {
   const glowMat = new THREE.MeshBasicMaterial({
     color: colors.frame,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.24,
     depthWrite: false,
     side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending,
-    toneMapped: false
+    blending: THREE.AdditiveBlending
   });
   glowMat.fog = false;
   const glow = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.9, 3.25), glowMat);
@@ -729,6 +774,7 @@ function spawnEnemy(ev, i, count, forcedX = null) {
   const { root, mixer, actions } = cloneModel(assetKey, 1);
   const height = enemyHeight(kind, !!bossLike, ev.scale || null, !!ev.mini);
   fitProp(root, height, { lockHeight: !!bossLike });
+  root.userData.isFoe = true;
   if (bossLike) root.userData.isBoss = true;
   const x = forcedX == null
     ? (count <= 1 ? 0 : ((i / Math.max(1, count - 1)) - 0.5) * (ev.spread || 2.2))
@@ -907,7 +953,7 @@ function updateSquadPlus() {
 function spawnBullet(origin, dir, damage) {
   const mesh = new THREE.Mesh(
     new THREE.SphereGeometry(0.08, 6, 6),
-    new THREE.MeshStandardMaterial({ color: 0xfff1a8, emissive: 0xffcc33, emissiveIntensity: 2.5 })
+    new THREE.MeshStandardMaterial({ color: 0xfff1a8, emissive: 0xffcc33, emissiveIntensity: 1.15 })
   );
   mesh.position.copy(origin);
   bulletGroup.add(mesh);
@@ -972,7 +1018,7 @@ function spawnBurst(x, y, z, color, count, life) {
 }
 
 function spawnGateBurst(gate) {
-  spawnBurst(gate.x, 1.3, gate.z, gateBurstColor(gate.op), 16, 0.5);
+  spawnBurst(gate.x, 1.3, gate.z, gateBurstColor(gate.op), Math.max(12, GATE_BURST_COUNT), 0.55);
 }
 
 function updateParticles(dt) {
@@ -1125,7 +1171,7 @@ function resetRun() {
   mixers.length = 0;
   level = levels[levelIndex];
   state = createLevelState(level);
-  playerX = 0; targetX = 0; fireAcc = 0; shake = 0; shakeAmp = 0; shakeLeft = 0; shakeDur = 0; bossIFrames = 0;
+  playerX = 0; targetX = 0; fireAcc = 10; shake = 0; shakeAmp = 0; shakeLeft = 0; shakeDur = 0; bossIFrames = 0;
   bossCamBlend = 0;
   clearParticles();
   bullets.splice(0).forEach(b => bulletGroup.remove(b.mesh));
@@ -1195,6 +1241,7 @@ function tryFire() {
     const dir = new THREE.Vector3(spread, 0.02, 1);
     spawnBullet(origin.clone().add(new THREE.Vector3(spread * 0.4, 0, 0)), dir, fs.damage);
   }
+  spawnBurst(origin.x, origin.y, origin.z + 0.35, 0xfff3c4, 5, 0.1);
 }
 
 function onResize() {
