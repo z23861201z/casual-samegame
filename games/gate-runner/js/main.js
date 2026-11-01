@@ -67,6 +67,9 @@ let shake = 0;
 let shakeAmp = 0;
 let shakeLeft = 0;
 let shakeDur = 0;
+let shakePhase = 0;
+let hitStop = 0;
+let killFlash = 0;
 let bossIFrames = 0; // short invuln after boss bump
 let bossHold = 0;
 let holdingFinish = false;
@@ -95,9 +98,15 @@ camera.lookAt(0, CAM_LOOK_Y, 0.6);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-// Face-close boards used to wash out: full-scene bloom on a bright gate quad.
-// Strength 0.28–0.36, threshold ≥ 0.75. Muzzle flashes stay above the threshold.
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.14, 0.86);
+// Bloom stays off while any gate is inside GATE_CLOSE_Z. A lit fill-plane plus
+// bloom was the white slab. Muzzle flashes still bloom once the gate is behind.
+const BLOOM_STRENGTH = 0.32;
+const BLOOM_RADIUS = 0.14;
+const BLOOM_THRESHOLD = 0.86;
+const bloom = new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight),
+  BLOOM_STRENGTH, BLOOM_RADIUS, BLOOM_THRESHOLD
+);
 composer.addPass(bloom);
 
 const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.55);
@@ -136,15 +145,18 @@ const flashPlaneGeo = new THREE.PlaneGeometry(1, 1);
 const flashSparkGeo = new THREE.SphereGeometry(0.2, 7, 6);
 const particles = [];
 const FX_CAP = 120;
-const KILL_SHAKE_AMP = 2.7;
-const KILL_SHAKE_DUR = 0.22;
+const KILL_SHAKE_AMP = 3.8;
+const KILL_SHAKE_DUR = 0.32;
+const KILL_HITSTOP = 0.09;
+const KILL_FLASH_SEC = 0.16;
 const BOSS_KILL_SHAKE_AMP = 3.1;
 const BOSS_KILL_SHAKE_DUR = 0.18;
-const CORPSE_DUR = 1.05;
+const CORPSE_DUR = 1.35;
 const BOSS_CORPSE_DUR = 0.72;
-const POSE_HOLD_SEC = 0.2;
+const POSE_HOLD_SEC = 0.32;
+const CORPSE_LIE_X = 1.2;
 const GATE_BOARDS_AHEAD = 3;
-const GATE_CLOSE_Z = 10;
+const GATE_CLOSE_Z = 14;
 const GATE_FLASH_NEAR = 6;
 const GATE_EMISSIVE = 0.04;
 const GATE_GLASS_OPACITY = 0.58;
@@ -328,14 +340,15 @@ function attachPrimitiveGun(root) {
   return gun;
 }
 
-/** Safety net: hide absurd near-camera meshes (bone-scale blowups / leftovers). */
+/** Safety net for squad bone-scale blowups.
+ *  Do not walk `world`: street tiles within 2.2m were latched invisible and the
+ *  bare asphalt slab became the portrait foreground gray board. */
 function hideNearCameraOccluders() {
   const camPos = camera.position;
   const box = new THREE.Box3();
   const size = new THREE.Vector3();
   const closest = new THREE.Vector3();
   const roots = [];
-  if (world) roots.push(world);
   for (const s of squad) if (s?.root) roots.push(s.root);
   for (const root of roots) {
     root.traverse(o => {
@@ -433,13 +446,16 @@ function playDeath(enemy) {
   enemy.knockFromY = enemy.root?.position.y ?? enemy.groundY ?? 0;
   const side = (slot % 2 === 0 ? 1 : -1) * (Math.sign((enemy.x || 0) - playerX) || 1);
   enemy.knockSign = side || 1;
-  const rawKnock = side * (enemy.isBoss ? 1.35 : 1.3);
+  const rawKnock = side * (enemy.isBoss ? 1.35 : 0.55);
   enemy.knockX = clampCorpseX(enemy.knockFromX + rawKnock) - enemy.knockFromX;
-  enemy.knockZ = enemy.isBoss ? 0.85 : 0.45;
+  enemy.knockZ = enemy.isBoss ? 0.85 : 0.28;
   if (enemy.root) {
     enemy.root.visible = true;
     enemy.root.frustumCulled = false;
     enemy.root.traverse((o) => { o.frustumCulled = false; });
+    // Pitch the whole rig immediately. A missing or upright Death clip must not
+    // leave the body standing. Boss tilt stays on the small C7 fall.
+    if (!enemy.isBoss) layCorpseFlat(enemy, 0);
   }
   const act = playAnim(enemy.actions, ['Death'], 0.08, 'once');
   if (!act) {
@@ -451,13 +467,34 @@ function playDeath(enemy) {
   });
 }
 
-/** Landed x stays inside ±roadHalfWidth so a knock cannot fling the body off the lane. */
+/** Landed x stays inside the lane so a knock cannot fling the body off the road. */
 function clampCorpseX(x) {
-  const half = level?.roadHalfWidth ?? 3.2;
+  const half = Math.max(0.5, (level?.roadHalfWidth ?? 3.2) - 0.45);
   return Math.max(-half, Math.min(half, x));
 }
 
-/** dt knockback. corpseT > 0 stays visible, then the downed pose holds ≥ 0.15s. */
+const _corpseBox = new THREE.Box3();
+
+/** Yaw first, then pitch ~1.2 so the body lies along the lane. XYZ pitch was a backward lean. */
+function layCorpseFlat(z, roll) {
+  if (!z.root || z.isBoss) return;
+  z.root.rotation.order = 'YXZ';
+  z.root.rotation.y = Math.PI;
+  z.root.rotation.x = CORPSE_LIE_X;
+  z.root.rotation.z = roll || 0;
+}
+
+/** After the lie-down pitch, keep the body on the asphalt instead of clipping through it. */
+function pinCorpseToRoad(z) {
+  const root = z.root;
+  if (!root || z.isBoss) return;
+  root.updateMatrixWorld(true);
+  _corpseBox.setFromObject(root);
+  if (_corpseBox.isEmpty() || !Number.isFinite(_corpseBox.min.y)) return;
+  root.position.y += -_corpseBox.min.y;
+}
+
+/** dt knockback. Non-boss bodies lie at rotation.x ≈ 1.2 and stay visible through poseHold. */
 function stepCorpses(dt) {
   for (const z of zombies) {
     if (!z.dead || !z.root) continue;
@@ -466,21 +503,32 @@ function stepCorpses(dt) {
       z.deathAge = (z.deathAge || 0) + dt;
       z.corpseT -= dt;
       const delay = z.fallDelay || 0;
-      const fallDur = Math.max(0.25, (z.deathDur || CORPSE_DUR) - delay);
       const fallT = Math.max(0, (z.deathAge || 0) - delay);
-      const u = Math.min(1, fallT / fallDur);
-      const shown = fallT <= 0 ? 0.12 : Math.min(1, 0.3 + u * 0.7);
-      const ease = 1 - (1 - shown) * (1 - shown);
-      z.root.position.x = clampCorpseX(z.knockFromX + (z.knockX || 0) * ease);
-      z.root.position.z = z.knockFromZ + (z.knockZ || 0) * ease;
-      const hop = Math.sin(Math.min(1, Math.max(u, 0.12)) * Math.PI) * (z.isBoss ? 0.65 : 0.58);
-      z.root.position.y = (z.knockFromY || 0) + hop;
-      z.root.rotation.z = (z.knockSign || 1) * (z.isBoss ? 0.95 : 1.3) * ease;
-      z.root.rotation.x = (z.isBoss ? 0.22 : 0.18) * ease;
+      const u = Math.min(1, fallT / 0.24);
+      const ease = u * u * (3 - 2 * u);
+      const slide = Math.max(ease, z.isBoss ? 0 : 0.4);
+      z.root.position.x = clampCorpseX(z.knockFromX + (z.knockX || 0) * slide);
+      z.root.position.z = z.knockFromZ + (z.knockZ || 0) * slide;
+      if (z.isBoss) {
+        const hop = Math.sin(Math.min(1, u) * Math.PI) * 0.65;
+        z.root.position.y = (z.knockFromY || 0) + hop;
+        z.root.rotation.z = (z.knockSign || 1) * 0.95 * ease;
+        z.root.rotation.x = 0.22 * ease;
+      } else {
+        layCorpseFlat(z, (z.knockSign || 1) * 0.15 * ease);
+        z.root.position.y = z.knockFromY || 0;
+        pinCorpseToRoad(z);
+      }
       if (z.corpseT <= 0) z.poseHold = z.isBoss ? 0.05 : POSE_HOLD_SEC;
     } else if (z.poseHold > 0) {
       z.root.visible = true;
       z.root.position.x = clampCorpseX(z.root.position.x);
+      if (z.isBoss) z.root.position.y = z.knockFromY || 0;
+      else {
+        layCorpseFlat(z, z.root.rotation.z || 0);
+        z.root.position.y = z.knockFromY || 0;
+        pinCorpseToRoad(z);
+      }
       z.poseHold -= dt;
     } else {
       z.root.visible = false;
@@ -552,14 +600,18 @@ function buildCity() {
 function buildRoad(length) {
   while (roadGroup.children.length) roadGroup.remove(roadGroup.children[0]);
   const segLen = 8;
-  const segs = Math.ceil(length / segLen) + 4;
+  // Chase cam sits ~14m behind the runner. Tiles must exist behind z=0 or the
+  // portrait near-field is only the flat gray underlay.
+  const ROAD_LEAD = 28;
+  const segs = Math.ceil((length + ROAD_LEAD) / segLen) + 4;
+  const slabLen = length + ROAD_LEAD + 40;
   // Continuous asphalt underlay first — kills yellow void tears between glTF street tiles.
   // Thin slab (h≈0.12) with top near y=0 so the road never reads as a tall dark block.
   const slab = new THREE.Mesh(
-    new THREE.BoxGeometry(level.roadHalfWidth * 2 + 4.2, 0.12, length + 48),
+    new THREE.BoxGeometry(level.roadHalfWidth * 2 + 4.2, 0.12, slabLen),
     new THREE.MeshStandardMaterial({ color: 0x5c636b, roughness: 0.92, metalness: 0.04 })
   );
-  slab.position.set(0, -0.06, length / 2);
+  slab.position.set(0, -0.06, (length - ROAD_LEAD) / 2);
   slab.name = 'asphaltUnderlay';
   slab.receiveShadow = true;
   slab.castShadow = false;
@@ -579,10 +631,9 @@ function buildRoad(length) {
     }
     root.updateMatrixWorld(true);
     const box2 = new THREE.Box3().setFromObject(root);
-    root.position.set(0, -box2.min.y + 0.02, i * segLen + segLen * 0.5);
+    const zMid = -ROAD_LEAD + i * segLen + segLen * 0.5;
+    root.position.set(0, -box2.min.y + 0.02, zMid);
     roadGroup.add(root);
-
-    const zMid = i * segLen + segLen * 0.5;
     const flip = i % 2 === 0 ? 1 : -1;
     for (const side of [-1, 1]) {
       const yellow = new THREE.Mesh(
@@ -614,20 +665,20 @@ function buildRoad(length) {
     if (i % 2 === 0) {
       const { root: bar } = cloneModel(i % 4 === 0 ? 'barrier' : 'plastic', 1);
       fitProp(bar, 1.2);
-      placeOnGround(bar, (i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 2.0), i * segLen + 2);
+      placeOnGround(bar, (i % 4 === 0 ? -1 : 1) * (level.roadHalfWidth + 2.0), zMid - 2);
       roadGroup.add(bar);
     }
     // No barrel.glb roadside props — at distance they read as gun barrels / planted rifles.
     if (i % 4 === 1) {
       const { root: light } = cloneModel('light', 1);
       fitProp(light, 2.4);
-      placeOnGround(light, -level.roadHalfWidth - 2.8, i * segLen + 3);
+      placeOnGround(light, -level.roadHalfWidth - 2.8, zMid - 1);
       roadGroup.add(light);
     }
     if (i % 5 === 3) {
       const { root: cone } = cloneModel('cone', 1);
       fitProp(cone, 0.7);
-      placeOnGround(cone, (i % 10 === 3 ? 1 : -1) * (level.roadHalfWidth + 2.1), i * segLen + 4);
+      placeOnGround(cone, (i % 10 === 3 ? 1 : -1) * (level.roadHalfWidth + 2.1), zMid);
       roadGroup.add(cone);
     }
   }
@@ -764,12 +815,10 @@ function makeGateVisual(gate, side) {
   panel.position.set(0, 1.32, -0.12);
   panel.name = 'gatePanel';
   group.add(panel);
-  const frameMat = new THREE.MeshStandardMaterial({
+  // Unlit rim. A lit Standard frame blew out to white once it filled the portrait FOV.
+  const frameMat = new THREE.MeshBasicMaterial({
     color: colors.frame,
-    emissive: colors.emissive,
-    emissiveIntensity: GATE_EMISSIVE,
-    roughness: 0.55,
-    metalness: 0.02,
+    toneMapped: true,
     blending: THREE.NormalBlending
   });
   frameMat.fog = false;
@@ -789,11 +838,21 @@ function makeGateVisual(gate, side) {
   group.userData.panel = panel;
   group.userData.panelMat = mat;
   group.userData.frameMat = frameMat;
+  group.userData.baseColor = colors.color;
+  group.userData.baseEmissive = colors.emissive;
+  group.userData.baseFrame = colors.frame;
+  group.userData.boardScaleX = 1;
   group.userData.redraw = (g) => {
     labelEl.textContent = gateLabelText(g);
     const sx = gateBoardWidth(g) / w;
-    panel.scale.x = sx;
-    frame.scale.x = sx;
+    group.userData.boardScaleX = sx;
+    if (group.userData.faceClose) {
+      panel.scale.set(0.05, 0.05, 0.05);
+      frame.scale.x = sx;
+    } else {
+      panel.scale.set(sx, 1, 1);
+      frame.scale.x = sx;
+    }
   };
   return group;
 }
@@ -1101,9 +1160,33 @@ function spawnMuzzleFlash(origin) {
   const x = origin.x;
   const y = origin.y;
   const z = origin.z;
-  const nearGate = nearestGateGap() < GATE_FLASH_NEAR;
-  const scaleMul = nearGate ? 0.35 : 1;
-  const dim = nearGate ? 0.45 : 1;
+  const nearGate = nearestGateGap() < GATE_CLOSE_Z;
+  if (nearGate) {
+    // No additive billboard in the gate mouth. Stacked flashes were a second white slab.
+    evictParticles(1);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffb060,
+      transparent: true,
+      opacity: 0.32,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: true,
+      blending: THREE.NormalBlending,
+      side: THREE.DoubleSide
+    });
+    mat.fog = false;
+    const spark = new THREE.Mesh(flashSparkGeo, mat);
+    spark.position.set(x, y, z + 0.08);
+    spark.scale.setScalar(0.16);
+    spark.renderOrder = 3;
+    fxGroup.add(spark);
+    particles.push({
+      mesh: spark, vx: 0, vy: 0.2, vz: 0.35, life: 0.06, maxLife: 0.06, flash: true, baseScale: 0.16
+    });
+    return;
+  }
+  const scaleMul = nearestGateGap() < GATE_FLASH_NEAR ? 0.35 : 1;
+  const dim = nearestGateGap() < GATE_FLASH_NEAR ? 0.45 : 1;
   evictParticles(3);
   const makeMat = (color, opacity) => {
     const mat = new THREE.MeshBasicMaterial({
@@ -1235,20 +1318,55 @@ function updateFloats(dt) {
 function tuneGateSurface(g, rank, rankCount, dz) {
   const ud = g.visual?.userData;
   if (!ud?.panelMat) return;
-  const close = dz < GATE_CLOSE_Z && dz > -1.5;
+  const close = dz < GATE_CLOSE_Z && dz > -2.5;
   const hasBehind = rank >= 0 && rank < rankCount - 1;
   const glassy = hasBehind && !close;
-  const emis = close ? 0 : GATE_EMISSIVE;
-  ud.panelMat.emissiveIntensity = emis;
-  ud.panelMat.opacity = glassy ? GATE_GLASS_OPACITY : 1;
-  ud.panelMat.depthWrite = !glassy;
+  ud.faceClose = close;
   ud.panelMat.blending = THREE.NormalBlending;
   ud.panelMat.transparent = true;
-  if (ud.panel) ud.panel.renderOrder = 10 - Math.max(0, rank);
-  if (ud.frameMat) {
-    ud.frameMat.emissiveIntensity = emis;
-    ud.frameMat.blending = THREE.NormalBlending;
+  if (ud.frameMat) ud.frameMat.blending = THREE.NormalBlending;
+  if (close) {
+    // Drop the fill. A bright plane this close becomes the white rectangle.
+    // Rim stays; HTML digits stay. Scale is a backstop if visible flips back on.
+    if (ud.panel) {
+      ud.panel.visible = false;
+      ud.panel.scale.set(0.05, 0.05, 0.05);
+    }
+    ud.panelMat.emissive.setHex(0x000000);
+    ud.panelMat.emissiveIntensity = 0;
+    ud.panelMat.opacity = 0.28;
+    ud.panelMat.depthWrite = false;
+    if (ud.baseColor != null) ud.panelMat.color.setHex(ud.baseColor).multiplyScalar(0.32);
+    if (ud.frameMat && ud.baseFrame != null) ud.frameMat.color.setHex(ud.baseFrame);
+  } else {
+    if (ud.panel) {
+      ud.panel.visible = true;
+      const sx = ud.boardScaleX || 1;
+      ud.panel.scale.set(sx, 1, 1);
+      ud.panel.renderOrder = 10 - Math.max(0, rank);
+    }
+    if (ud.baseColor != null) ud.panelMat.color.setHex(ud.baseColor);
+    if (ud.baseEmissive != null) ud.panelMat.emissive.setHex(ud.baseEmissive);
+    ud.panelMat.emissiveIntensity = glassy ? 0 : GATE_EMISSIVE;
+    ud.panelMat.opacity = glassy ? GATE_GLASS_OPACITY : 1;
+    ud.panelMat.depthWrite = !glassy;
+    if (ud.frameMat && ud.baseFrame != null) ud.frameMat.color.setHex(ud.baseFrame);
   }
+}
+
+/** Any gate still in the close band kills bloom for this frame. */
+function syncCloseBloom() {
+  let close = false;
+  const zNow = state ? state.z : 0;
+  if (state) {
+    for (const g of gates) {
+      if (g.consumed || g.op === 'finish') continue;
+      const dz = g.z - zNow;
+      if (dz < GATE_CLOSE_Z && dz > -2.5) { close = true; break; }
+    }
+  }
+  bloom.enabled = !close;
+  bloom.strength = close ? 0 : BLOOM_STRENGTH;
 }
 
 /** Next 2–3 gate pairs keep colored 3D boards. HTML digits mark only the nearest pair. */
@@ -1307,6 +1425,7 @@ function updateGateLabels(dt = 0) {
     el.style.fontSize = '42px';
     el.style.color = g.visual.userData.labelColor || '#fff';
   }
+  syncCloseBloom();
 }
 
 function refreshStartCard() {
@@ -1325,7 +1444,10 @@ function resetRun() {
   mixers.length = 0;
   level = levels[levelIndex];
   state = createLevelState(level);
-  playerX = 0; targetX = 0; fireAcc = 10; shake = 0; shakeAmp = 0; shakeLeft = 0; shakeDur = 0; bossIFrames = 0;
+  playerX = 0; targetX = 0; fireAcc = 10; shake = 0; shakeAmp = 0; shakeLeft = 0; shakeDur = 0;
+  shakePhase = 0; hitStop = 0; killFlash = 0; bossIFrames = 0;
+  const flashEl = document.getElementById('killFlash');
+  if (flashEl) flashEl.style.opacity = '0';
   bossCamBlend = 0;
   clearParticles();
   bullets.splice(0).forEach(b => bulletGroup.remove(b.mesh));
@@ -1398,7 +1520,9 @@ function tryFire() {
   const guns = squad.length
     ? squad.map(s => new THREE.Vector3(s.root.position.x + 0.38, 1.42, s.root.position.z - 0.15))
     : [origin];
-  for (const g of guns) spawnMuzzleFlash(g);
+  const nearGate = nearestGateGap() < GATE_CLOSE_Z;
+  const flashGuns = nearGate ? guns.slice(0, 1) : guns.slice(0, 4);
+  for (const g of flashGuns) spawnMuzzleFlash(g);
 }
 
 function onResize() {
@@ -1411,7 +1535,9 @@ function onResize() {
 }
 addEventListener('resize', onResize);
 
-/** Chase cam, pulled back while a boss is on screen so the tall model stays in frame. */
+/** Chase cam, pulled back while a boss is on screen so the tall model stays in frame.
+ *  Shake offsets the camera only. lookAt stays on the road center — matching
+ *  lookAt.x to the kicked camera cancelled the horizontal punch. */
 function poseCamera(dt = 0) {
   const liveBoss = zombies.some(z => z.isBoss && z.born && (!z.dead || (z.corpseT || 0) > 0));
   const aim = liveBoss ? 1 : 0;
@@ -1423,13 +1549,29 @@ function poseCamera(dt = 0) {
   const lookY = CAM_LOOK_Y + (BOSS_CAM_LOOK_Y - CAM_LOOK_Y) * u;
   const lookAhead = CAM_LOOK_AHEAD + (BOSS_CAM_LOOK_AHEAD - CAM_LOOK_AHEAD) * u;
   const z0 = state ? state.z : 0;
-  const camX = (Math.random() - 0.5) * shake * 1.24;
-  const camY = camHeight + (Math.random() - 0.5) * shake * 0.64;
-  const camZ = z0 - back + (Math.random() - 0.5) * shake * 0.32;
+  shakePhase += Math.max(0, dt) * 36;
+  const kickX = Math.max(-2.6, Math.min(2.6, Math.sin(shakePhase) * shake * 2.05));
+  const kickY = Math.max(-1.2, Math.min(1.2, Math.cos(shakePhase * 1.17) * shake * 0.95));
+  const kickZ = Math.max(-0.8, Math.min(0.8, Math.sin(shakePhase * 1.6) * shake * 0.55));
+  const camX = kickX;
+  const camY = camHeight + kickY;
+  const camZ = z0 - back + kickZ;
   camera.position.set(camX, camY, camZ);
-  camera.lookAt(camX, lookY, z0 + lookAhead);
+  camera.lookAt(0, lookY, z0 + lookAhead);
   camera.updateMatrixWorld();
   return { camX, camY, camZ };
+}
+
+function triggerKillPunch() {
+  addShake(KILL_SHAKE_AMP, KILL_SHAKE_DUR);
+  hitStop = Math.max(hitStop, KILL_HITSTOP);
+  killFlash = 1;
+}
+
+function updateKillFlash(dt) {
+  const el = document.getElementById('killFlash');
+  if (killFlash > 0) killFlash = Math.max(0, killFlash - dt / KILL_FLASH_SEC);
+  if (el) el.style.opacity = killFlash > 0 ? String(killFlash * 0.62) : '0';
 }
 
 /** Screen-right from camera matrix column 0. Behind the runner this column's world X is negative. */
@@ -1572,7 +1714,7 @@ function update(dt) {
               banner.textContent = z.mini ? '迷你龙倒下！' : '巨龙倒下！';
               addShake(BOSS_KILL_SHAKE_AMP, BOSS_KILL_SHAKE_DUR);
             } else {
-              addShake(KILL_SHAKE_AMP, KILL_SHAKE_DUR);
+              triggerKillPunch();
             }
             if (z.hpBar) { z.hpBar.remove(); z.hpBar = null; }
             audio.playDeath();
@@ -1712,15 +1854,19 @@ function update(dt) {
 }
 
 function render() {
-  const dt = Math.min(0.033, clock.getDelta());
+  const raw = Math.min(0.033, clock.getDelta());
+  const pausing = hitStop > 0;
+  if (pausing) hitStop = Math.max(0, hitStop - raw);
+  const dt = pausing ? 0 : raw;
   mixers.forEach(m => m.update(dt));
   if (running && state) steerFromPointer();
   update(dt);
 
-  stepCorpses(dt);
-  updateParticles(dt);
-  decayShake(dt);
-  const { camX, camY, camZ } = poseCamera(dt);
+  stepCorpses(raw);
+  updateParticles(raw);
+  decayShake(raw);
+  updateKillFlash(raw);
+  const { camX, camY, camZ } = poseCamera(raw);
 
   const z0 = state ? state.z : 0;
   sun.target.position.set(playerX, 0, z0);
@@ -1761,6 +1907,56 @@ function render() {
 }
 
 function updateDebugOverlay(camX, camY, camZ) {
+  if (!window.__grCtl) {
+    window.__grCtl = {
+      jump(z) { if (state) state.z = z; },
+      fire(n) { if (state) state.firepower = Math.max(1, n | 0); },
+      people(n) { if (state && level) { state.people = capPeople(n, level); syncSquadCount(); } },
+      killFront() {
+        const zNow = state ? state.z : 0;
+        const live = zombies.filter(z => !z.dead && !z.isBoss)
+          .sort((a, b) => Math.abs(a.z - zNow) - Math.abs(b.z - zNow))[0];
+        if (!live) return null;
+        playDeath(live);
+        triggerKillPunch();
+        return { rx: live.root.rotation.x, x: live.root.position.x, vis: live.root.visible };
+      },
+      probe() {
+        const zNow = state ? state.z : 0;
+        return {
+          z: zNow, running, bloom: bloom.enabled, strength: bloom.strength, shake, hitStop, killFlash,
+          panels: gates.filter(g => !g.consumed && g.op !== 'finish').map(g => ({
+            dz: +((g.z - zNow).toFixed(2)),
+            panel: g.visual?.userData?.panel?.visible === true,
+            sx: +(g.visual?.userData?.panel?.scale?.x || 0).toFixed(3),
+            op: g.visual?.userData?.panelMat?.opacity,
+            emis: g.visual?.userData?.panelMat?.emissiveIntensity
+          })),
+          corpses: zombies.filter(z => z.dead).map(z => {
+            z.root.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(z.root);
+            const size = new THREE.Vector3();
+            box.getSize(size);
+            const e = z.root.matrixWorld.elements;
+            return {
+              boss: !!z.isBoss,
+              rx: +z.root.rotation.x.toFixed(3),
+              ry: +z.root.rotation.y.toFixed(3),
+              order: z.root.rotation.order,
+              vis: z.root.visible !== false,
+              x: +z.root.position.x.toFixed(2),
+              y: +z.root.position.y.toFixed(2),
+              h: +size.y.toFixed(2),
+              minY: +box.min.y.toFixed(2),
+              up: [+e[4].toFixed(2), +e[5].toFixed(2), +e[6].toFixed(2)],
+              corpseT: +z.corpseT.toFixed(2),
+              hold: +(z.poseHold || 0).toFixed(2)
+            };
+          })
+        };
+      }
+    };
+  }
   if (!debugEl) {
     debugEl = document.createElement('div');
     debugEl.id = 'debugOverlay';
@@ -1797,7 +1993,14 @@ function updateDebugOverlay(camX, camY, camZ) {
       fx: fxGroup.children.length,
       particles: particles.length,
       shake: +shake.toFixed(3),
-      bloom: { strength: bloom.strength, radius: bloom.radius, threshold: bloom.threshold },
+      bloom: { strength: bloom.strength, radius: bloom.radius, threshold: bloom.threshold, enabled: bloom.enabled },
+      lie: zombies.filter(z => z.dead && !z.isBoss).map(z => ({
+        rx: +(z.root?.rotation.x || 0).toFixed(2),
+        vis: z.root?.visible !== false,
+        x: +(z.root?.position.x || 0).toFixed(2),
+        hold: +(z.poseHold || 0).toFixed(2),
+        corpseT: +(z.corpseT || 0).toFixed(2)
+      })),
       boards: liveBoards / 2,
       labels: [...document.querySelectorAll('.gate-num')].filter(el => el.style.display === 'block').length,
       corpses: zombies.filter(z => z.dead).map(z => ({

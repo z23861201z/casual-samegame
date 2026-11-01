@@ -123,3 +123,24 @@ html, body { margin: 0; height: 100%; background: #6ea8ff; overflow: hidden; tou
   text-shadow: 0 0 12px rgba(80,140,255,.85);
   pointer-events: none; white-space: nowrap;
 }
+#killFlash {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  background: #07090f; opacity: 0;
+}
+/* Start card sits at the top. A full-screen gray veil was covering the portrait road. */
+.overlay-start {
+  background: transparent;
+  align-items: start;
+  justify-items: center;
+  padding: calc(58px + env(safe-area-inset-top)) 14px 12px;
+}
+.overlay-start .card {
+  width: min(300px, 84vw);
+  padding: 12px 14px 12px;
+  border-radius: 16px;
+  background: rgba(12, 18, 34, 0.52);
+  box-shadow: 0 10px 28px rgba(0,0,0,.22);
+}
+.overlay-start .card h1 { font-size: 22px; margin: 4px 0 6px; }
+.overlay-start .card p { margin: 0 0 8px; font-size: 14px; line-height: 1.35; }
+.overlay-start .card .sub { margin-top: 0; margin-bottom: 10px; }
