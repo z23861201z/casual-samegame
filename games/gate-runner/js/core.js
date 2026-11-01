@@ -20,6 +20,12 @@ export const BULLET_MAX_AHEAD = 40;
 export const FULL_BLOCK_MAX_GAP = 0.8;
 export const PLAYER_SMOOTH = 26;
 export const SERIOUS_LANE = 0.65;
+/** Squad ceiling when a level does not set `maxPeople`. */
+export const DEFAULT_MAX_PEOPLE = 80;
+/** add/sub/fire face numbers stay two digits. Width already saturates by value/20. */
+export const MAX_GATE_LINEAR = 99;
+/** mul / fireMul face numbers. Shooting may climb, never past this. */
+export const MAX_GATE_MUL = 5;
 
 export function playableLimit(roadHalfWidth) {
   return roadHalfWidth - EDGE_INSET;
@@ -61,27 +67,59 @@ export function gateSideAtX(x, roadHalfWidth = 3.2) {
   return 0;
 }
 
-export function applyGate(people, firepower, gate) {
+/** Level override wins when it is a finite count of at least 1. Otherwise 80. */
+export function maxPeopleFor(level) {
+  const raw = level?.maxPeople;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 1) return Math.floor(raw);
+  return DEFAULT_MAX_PEOPLE;
+}
+
+/**
+ * Shared people write. A wiped squad stays 0.
+ * Any positive count is clamped to [1, maxPeople].
+ */
+export function capPeople(people, level) {
+  const cap = maxPeopleFor(level);
+  const n = Math.floor(Number.isFinite(people) ? people : 0);
+  if (n <= 0) return 0;
+  if (n >= cap) return cap;
+  return n;
+}
+
+/** Face-number ceiling. mul/fireMul ≤ 5. add/sub/fire ≤ 99. Other ops stay ≥ 1. */
+export function clampGateValue(op, value) {
+  const raw = Number.isFinite(value) ? value : 1;
+  const n = Math.max(1, Math.floor(raw));
+  if (op === 'mul' || op === 'fireMul') return Math.min(MAX_GATE_MUL, n);
+  if (op === 'add' || op === 'sub' || op === 'fire') return Math.min(MAX_GATE_LINEAR, n);
+  return n;
+}
+
+export function applyGate(people, firepower, gate, level = null) {
   const op = gate.op;
-  const v = Math.max(1, Math.floor(gate.value || 1));
-  let p = people;
+  const v = clampGateValue(op, gate.value || 1);
+  let p = Math.floor(Number.isFinite(people) ? people : 0);
   let f = firepower;
   if (op === 'add') p += v;
   else if (op === 'mul') p = Math.max(1, Math.floor(p * v));
   else if (op === 'sub') p = Math.max(1, p - v);
   else if (op === 'fire') f += v;
   else if (op === 'fireMul') f = Math.max(1, Math.floor(f * v));
-  return { people: p, firepower: f };
+  // Gates never wipe the squad. Sub/mul/add stay at least 1. Collision owns 0.
+  if (op === 'add' || op === 'mul' || op === 'sub') p = Math.max(1, p);
+  return { people: capPeople(p, level), firepower: f };
 }
 
 export function shootGate(gate, damage, rng = Math.random) {
   const hp = Math.max(0, (gate.hp ?? 0) - damage);
   let value = gate.value;
   if (gate.op === 'add' || gate.op === 'sub' || gate.op === 'fire') {
-    value = Math.max(1, Math.floor((gate.value || 1) + Math.max(1, Math.floor(damage / 2))));
+    const bump = Math.max(1, Math.floor(Math.max(0, damage) / 2));
+    value = (gate.value || 1) + bump;
   } else if (gate.op === 'mul' || gate.op === 'fireMul') {
-    if (damage > 0 && rng() < 0.15) value = Math.min(5, (gate.value || 2) + 1);
+    if (damage > 0 && rng() < 0.15) value = (gate.value || 2) + 1;
   }
+  value = clampGateValue(gate.op, value);
   const widthScale = 0.55 + Math.min(1.2, value / 20);
   return { ...gate, hp, value, widthScale };
 }
@@ -173,7 +211,7 @@ export function createLevelState(level) {
   return {
     levelId: level.id ?? 1,
     z: 0,
-    people: level.startPeople,
+    people: capPeople(level.startPeople, level),
     firepower: level.startFirepower,
     score: 0,
     kills: 0,
@@ -342,14 +380,14 @@ export function durationSeconds(level) {
   return level.length / level.runSpeed;
 }
 
-export function gateScore(people, firepower, gate) {
-  const next = applyGate(people, firepower, gate);
+export function gateScore(people, firepower, gate, level = null) {
+  const next = applyGate(people, firepower, gate, level);
   return (next.people - people) * 10 + (next.firepower - firepower) * 25;
 }
 
-export function betterGateSide(left, right, people, firepower) {
-  const sl = gateScore(people, firepower, left);
-  const sr = gateScore(people, firepower, right);
+export function betterGateSide(left, right, people, firepower, level = null) {
+  const sl = gateScore(people, firepower, left, level);
+  const sr = gateScore(people, firepower, right, level);
   return sr > sl ? 1 : -1;
 }
 
@@ -406,7 +444,7 @@ export function simulateLevel(level, policy = 'serious') {
   let z = 0;
   let x = edgeLeft ? -limit : edgeRight ? limit : 0;
   let targetX = x;
-  let people = level.startPeople;
+  let people = capPeople(level.startPeople, level);
   let firepower = level.startFirepower;
   let kills = 0;
   let score = 0;
@@ -434,7 +472,7 @@ export function simulateLevel(level, policy = 'serious') {
           x: side * GATE_VIS_X,
           consumed: false,
           hp: raw.hp ?? 10,
-          value: raw.value ?? 1,
+          value: clampGateValue(raw.op, raw.value ?? 1),
           op: raw.op
         });
       }
@@ -482,7 +520,7 @@ export function simulateLevel(level, policy = 'serious') {
       if (gz != null && gz - z < 3.2) {
         const left = gates.find(g => !g.consumed && g.z === gz && g.side < 0);
         const right = gates.find(g => !g.consumed && g.z === gz && g.side > 0);
-        const side = left && right ? betterGateSide(left, right, people, firepower) : -1;
+        const side = left && right ? betterGateSide(left, right, people, firepower, level) : -1;
         targetX = side < 0 ? -SERIOUS_LANE : SERIOUS_LANE;
       } else {
         const foes = enemies.filter(e => !e.dead && !e.isBoss && e.z >= z - 0.3 && e.z - z < BULLET_MAX_AHEAD);
@@ -492,7 +530,7 @@ export function simulateLevel(level, policy = 'serious') {
         } else if (gz != null) {
           const left = gates.find(g => !g.consumed && g.z === gz && g.side < 0);
           const right = gates.find(g => !g.consumed && g.z === gz && g.side > 0);
-          const side = left && right ? betterGateSide(left, right, people, firepower) : -1;
+          const side = left && right ? betterGateSide(left, right, people, firepower, level) : -1;
           targetX = side < 0 ? -SERIOUS_LANE : SERIOUS_LANE;
         } else {
           targetX = 0;
@@ -578,11 +616,11 @@ export function simulateLevel(level, policy = 'serious') {
       if (e.dead) continue;
       const rad = enemyRadii(e, half);
       if (Math.abs(e.z - z) < rad.bodyZ && Math.abs(e.x - x) < rad.bodyX) {
-        people = collideCost(people, e.hp, { boss: !!e.isBoss, mini: !!e.mini });
+        people = capPeople(collideCost(people, e.hp, { boss: !!e.isBoss, mini: !!e.mini }), level);
         if (!e.isBoss) e.dead = true;
         else e.z += 2.2;
         if (people <= 0) {
-          people = 0;
+          people = capPeople(0, level);
           lost = true;
           won = false;
           finished = true;
@@ -601,9 +639,9 @@ export function simulateLevel(level, policy = 'serious') {
       if (g.side === side && side !== 0 && !takenZ.has(g.z)) {
         takenZ.add(g.z);
         g.consumed = true;
-        const next = applyGate(people, firepower, g);
+        const next = applyGate(people, firepower, g, level);
         const gained = Math.max(0, next.people - people);
-        people = next.people;
+        people = capPeople(next.people, level);
         firepower = next.firepower;
         score += 50 + gained * 5;
       } else {
@@ -672,6 +710,9 @@ export function levelProblems(lv) {
   if (lv.id === 10 && !(dur >= 22 && dur <= 30)) p.push('L10 duration');
   const need = finishNeed(lv);
   if (!(lv.startPeople < need)) p.push('startPeople >= needPeople');
+  const cap = maxPeopleFor(lv);
+  if (Number.isFinite(need) && cap < need) p.push('maxPeople < needPeople');
+  if ((lv.stars?.threePeople ?? 0) > cap) p.push('maxPeople < threePeople');
   const blob = JSON.stringify(lv);
   if (blob.includes('readableWave')) p.push('readableWave');
   const gateZs = [...new Set((lv.events || []).filter(e => e.type === 'gatePair').map(e => e.z))].sort((a, b) => a - b);

@@ -9,7 +9,7 @@ import {
   starRating, createLevelState, progress, kindToAssetKey, enemyHeight,
   mapRoadPointer, nudgeLane, gateSideAtX, visibleBodyCount, squadPlusText,
   squadOffsets, fullBlockXs, spreadXs, enemyApproach, enemyRadii,
-  stepBossZ, GATE_VIS_X, GATE_BULLET_X, GATE_BULLET_Z,
+  stepBossZ, capPeople, clampGateValue, GATE_VIS_X, GATE_BULLET_X, GATE_BULLET_Z,
   BULLET_SPEED, BULLET_LIFE, BULLET_MAX_AHEAD,
   BOSS_LEASH_SECONDS, PLAYER_SMOOTH, clampLane, twoKillsFor, threeKillsFor
 } from './core.js';
@@ -719,7 +719,8 @@ function spawnFromLevel() {
   for (const ev of level.events) {
     if (ev.type === 'gatePair') {
       for (const [sideName, side] of [['left', -1], ['right', 1]]) {
-        const raw = { ...ev[sideName], widthScale: 0.55 + Math.min(1.2, (ev[sideName].value || 1) / 20), side, z: ev.z, consumed: false };
+        const face = clampGateValue(ev[sideName].op, ev[sideName].value ?? 1);
+        const raw = { ...ev[sideName], value: face, widthScale: 0.55 + Math.min(1.2, face / 20), side, z: ev.z, consumed: false };
         const visual = makeGateVisual(raw, side);
         const x = side * GATE_VIS_X;
         visual.position.set(x, 0, ev.z);
@@ -770,8 +771,12 @@ function spawnPlayer() {
   squad.push({ root, mixer, actions, groundY });
 }
 
+function shownPeople() {
+  return capPeople(state.people, level);
+}
+
 function syncSquadCount() {
-  const people = state?.people ?? 1;
+  const people = state ? shownPeople() : 1;
   const want = Math.max(1, visibleBodyCount(people));
   while (squad.length < want) {
     const { root, mixer, actions } = cloneModel('sam', 1);
@@ -807,7 +812,7 @@ function syncSquadCount() {
 }
 
 function updateSquadPlus() {
-  const text = state ? squadPlusText(state.people) : '';
+  const text = state ? squadPlusText(shownPeople()) : '';
   if (!text) {
     squadPlusEl.style.display = 'none';
     return;
@@ -959,7 +964,7 @@ function resetRun() {
 }
 
 function updateHud() {
-  hudPeople.textContent = String(state.people);
+  hudPeople.textContent = String(shownPeople());
   hudFire.textContent = String(state.firepower);
   hudScore.textContent = String(state.score);
   hudProg.style.width = `${Math.floor(progress(state) * 100)}%`;
@@ -986,7 +991,7 @@ function endGame(won) {
   document.getElementById('starHint').textContent = starHint;
   document.getElementById('settleScore').textContent = String(state.score);
   document.getElementById('settleKills').textContent = String(state.kills);
-  document.getElementById('settlePeople').textContent = String(state.people);
+  document.getElementById('settlePeople').textContent = String(shownPeople());
   document.getElementById('settleFire').textContent = String(state.firepower);
 
   const hasNext = won && levelIndex < levels.length - 1;
@@ -1000,7 +1005,7 @@ function endGame(won) {
 }
 
 function tryFire() {
-  const fs = fireStats(state.people, state.firepower);
+  const fs = fireStats(shownPeople(), state.firepower);
   fireAcc = 0;
   audio.playShoot();
   const origin = new THREE.Vector3(playerX, 1.2, state.z + 0.6);
@@ -1132,7 +1137,7 @@ function update(dt) {
     z.hitCooldown = Math.max(0, z.hitCooldown - dt);
   }
 
-  const fs = fireStats(state.people, state.firepower);
+  const fs = fireStats(shownPeople(), state.firepower);
   fireAcc += dt;
   if (fireAcc >= fs.interval) tryFire();
 
@@ -1204,7 +1209,7 @@ function update(dt) {
     if (!canHit) continue;
     if (Math.abs(z.z - state.z) < rad.bodyZ && Math.abs(z.x - playerX) < rad.bodyX) {
       const before = state.people;
-      state.people = collideCost(state.people, z.hp, { boss: !!z.isBoss, mini: !!z.mini });
+      state.people = capPeople(collideCost(state.people, z.hp, { boss: !!z.isBoss, mini: !!z.mini }), level);
       const lost = Math.max(0, before - state.people);
       shake = Math.max(shake, z.isBoss ? 0.85 : 0.55);
       if (lost > 0) {
@@ -1240,8 +1245,8 @@ function update(dt) {
       g.consumed = true;
       const beforeP = state.people;
       const beforeF = state.firepower;
-      const next = applyGate(state.people, state.firepower, g);
-      state.people = next.people;
+      const next = applyGate(state.people, state.firepower, g, level);
+      state.people = capPeople(next.people, level);
       state.firepower = next.firepower;
       state.score += 50 + Math.max(0, state.people - beforeP) * 5 + Math.max(0, state.firepower - beforeF) * 20;
       shake = Math.max(shake, 0.35);
@@ -1380,6 +1385,9 @@ function updateDebugOverlay(camX, camY, camZ) {
   try {
     setLoad(0.05, '读取关卡…');
     await loadLevels();
+    // HTML defaults the start card to level 1. Paint the deep-link label
+    // as soon as levelIndex is known — do not wait out the glTF fetch.
+    refreshStartCard();
     setLoad(0.1, '加载 glTF…');
     await loadAssets();
     setLoad(1, '就绪');

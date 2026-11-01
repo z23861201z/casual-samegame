@@ -4,7 +4,9 @@ import {
   pelletCount, visibleBodyCount, squadPlusText, gateSideAtX, mapRoadPointer, nudgeLane,
   fullBlockXs, clampCovered, maxUncoveredGap,
   twoKillsFor, threeKillsFor, levelProblems, simulateLevel, durationSeconds, finishNeed,
-  closeWindowSeconds, countEnemies
+  closeWindowSeconds, countEnemies,
+  capPeople, maxPeopleFor, clampGateValue,
+  DEFAULT_MAX_PEOPLE, MAX_GATE_LINEAR, MAX_GATE_MUL
 } from '../js/core.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -21,9 +23,65 @@ assert(applyGate(1, 1, { op: 'sub', value: 5 }).people === 1, 'sub floor 1');
 assert(applyGate(3, 1, { op: 'fire', value: 2 }).firepower === 3, 'fire add');
 assert(applyGate(3, 2, { op: 'fireMul', value: 2 }).firepower === 4, 'fire mul');
 
+assert(DEFAULT_MAX_PEOPLE === 80, 'default maxPeople is 80');
+assert(MAX_GATE_LINEAR <= 99 && MAX_GATE_LINEAR >= 12, 'add/sub/fire face cap stays readable');
+assert(MAX_GATE_MUL === 5, 'mul face cap stays 5');
+assert(maxPeopleFor(null) === 80, 'missing level uses 80');
+assert(maxPeopleFor({ maxPeople: 40 }) === 40, 'level maxPeople');
+assert(maxPeopleFor({ maxPeople: 0 }) === 80, 'non-positive maxPeople ignored');
+assert(capPeople(0, null) === 0, 'wipe stays 0');
+assert(capPeople(1, null) === 1, 'one stays');
+assert(capPeople(80, null) === 80 && capPeople(81, null) === 80, 'default cap binds');
+assert(capPeople(500, { maxPeople: 36 }) === 36, 'level cap binds');
+assert(capPeople(0, { maxPeople: 36 }) === 0, 'level cap keeps a wipe at 0');
+
+// Uncapped mul is 200. This assertion goes red if applyGate stops clamping.
+assert(40 * 5 > DEFAULT_MAX_PEOPLE, 'mul fixture exceeds the cap');
+assert(applyGate(40, 1, { op: 'mul', value: 5 }).people === 80, 'mul cannot break 80');
+assert(applyGate(40, 1, { op: 'mul', value: 5 }, { maxPeople: 36 }).people === 36, 'mul respects level maxPeople');
+assert(applyGate(70, 1, { op: 'add', value: 50 }).people === 80, 'add respects cap');
+assert(applyGate(6, 1, { op: 'add', value: 100000 }).people === 80, 'astronomical add cannot pass the cap');
+assert(applyGate(40, 1, { op: 'sub', value: 3 }, { maxPeople: 40 }).people === 37, 'sub under the cap');
+assert(applyGate(2, 1, { op: 'sub', value: 99 }).people === 1, 'sub floor still 1');
+assert(applyGate(0, 1, { op: 'sub', value: 4 }).people === 1, 'sub does not leave 0');
+assert(applyGate(0, 1, { op: 'mul', value: 4 }).people === 1, 'mul does not leave 0');
+assert(applyGate(200, 2, { op: 'fire', value: 2 }).people === 80, 'fire pass still caps people');
+assert(applyGate(200, 2, { op: 'fire', value: 2 }).firepower === 4, 'fire still adds');
+assert(clampGateValue('add', 100000) === MAX_GATE_LINEAR, 'add face ceiling');
+assert(clampGateValue('sub', 100000) === MAX_GATE_LINEAR, 'sub face ceiling');
+assert(clampGateValue('fire', 100000) === MAX_GATE_LINEAR, 'fire face ceiling');
+assert(clampGateValue('mul', 9) === 5, 'mul face ceiling');
+assert(clampGateValue('fireMul', 9) === 5, 'fireMul face ceiling');
+
 const g = shootGate({ op: 'add', value: 1, hp: 10 }, 4);
 assert(g.hp === 6, 'gate hp');
-assert(g.value >= 1, 'gate value');
+assert(g.value >= 1 && g.value <= MAX_GATE_LINEAR, 'gate value');
+
+const raised = shootGate({ op: 'add', value: 6, hp: 40 }, 4, () => 0);
+assert(raised.value > 6 && raised.value <= 99, 'one burst raises add under the ceiling');
+
+function hammer(op, value) {
+  let gate = { op, value, hp: 9000 };
+  for (let i = 0; i < 400; i++) gate = shootGate(gate, 12, () => 0);
+  return gate;
+}
+const addFace = hammer('add', 6);
+const subFace = hammer('sub', 2);
+const fireFace = hammer('fire', 1);
+assert(addFace.value === MAX_GATE_LINEAR && addFace.value <= 99, `add face ${addFace.value}`);
+assert(subFace.value === MAX_GATE_LINEAR && subFace.value <= 99, `sub face ${subFace.value}`);
+assert(fireFace.value === MAX_GATE_LINEAR && fireFace.value <= 99, `fire face ${fireFace.value}`);
+assert(applyGate(6, 1, addFace).people === 80, 'passing a maxed add gate fills to 80 and stops');
+assert(applyGate(50, 1, { op: 'mul', value: hammer('mul', 2).value }).people <= 80, 'shot mul still caps people');
+
+let mulFace = { op: 'mul', value: 2, hp: 40 };
+for (let i = 0; i < 8; i++) mulFace = shootGate(mulFace, 3, () => 0);
+assert(mulFace.value === 5, 'mul climbs to 5 and stops');
+assert(shootGate({ op: 'mul', value: 2, hp: 10 }, 4, () => 1).value === 2, 'mul stays put without the proc');
+assert(shootGate({ op: 'fireMul', value: 5, hp: 10 }, 4, () => 0).value === 5, 'fireMul stays at 5');
+
+assert(createLevelState({ startPeople: 200, startFirepower: 1, length: 100 }).people === 80, 'start people capped');
+assert(createLevelState({ startPeople: 200, startFirepower: 1, length: 100, maxPeople: 25 }).people === 25, 'start uses level cap');
 
 const z = damageZombie({ hp: 5 }, 5);
 assert(z.dead && z.hp === 0, 'zombie dead');
@@ -124,30 +182,64 @@ broken.startPeople = finishNeed(broken);
 const brokenProblems = levelProblems(broken);
 assert(brokenProblems.some(p => p.includes('startPeople')), `old threshold must fail, got ${brokenProblems.join(',')}`);
 
+const DURATION = { 1: 20, 2: 19, 3: 21, 4: 22, 5: 23, 6: 20, 7: 24, 8: 18, 9: 25, 10: 26 };
+
+function specCap(lv) {
+  return (typeof lv.maxPeople === 'number' && Number.isFinite(lv.maxPeople) && lv.maxPeople >= 1)
+    ? Math.floor(lv.maxPeople)
+    : 80;
+}
+
 const rows = [];
 for (const lv of levels) {
   const probs = levelProblems(lv);
   assert(probs.length === 0, `L${lv.id} contract: ${probs.join('; ')}`);
+  const dur = durationSeconds(lv);
+  assert(Math.abs(dur - DURATION[lv.id]) < 1e-9, `L${lv.id} duration changed to ${dur}`);
+  const cap = specCap(lv);
+  assert(maxPeopleFor(lv) === cap, `maxPeopleFor L${lv.id}`);
   const serious = simulateLevel(lv, 'serious');
   const edge = simulateLevel(lv, 'edge');
   const edgeLeft = simulateLevel(lv, 'edge-left');
   const needKills = threeKillsFor(lv);
-  assert(serious.won && serious.stars === 3, `serious L${lv.id} won=${serious.won} stars=${serious.stars} reason=${serious.reason} k=${serious.kills}`);
+  assert(serious.won && serious.stars === 3, `serious L${lv.id} won=${serious.won} stars=${serious.stars} reason=${serious.reason} k=${serious.kills} people=${serious.people}`);
   assert(serious.kills >= needKills, `serious L${lv.id} kills ${serious.kills} < ${needKills}`);
+  assert(serious.people <= cap, `serious L${lv.id} people ${serious.people} > maxPeople ${cap}`);
+  assert(edge.people <= cap && edgeLeft.people <= cap, `edge L${lv.id} people over cap`);
   assert(!edge.won && edge.stars === 0, `edge L${lv.id} won=${edge.won} reason=${edge.reason}`);
   assert(!edgeLeft.won && edgeLeft.stars === 0, `edge-left L${lv.id} won=${edgeLeft.won} reason=${edgeLeft.reason}`);
   rows.push({
     id: lv.id,
-    dur: +durationSeconds(lv).toFixed(2),
-    serious: { won: serious.won, stars: serious.stars, kills: serious.kills, people: serious.people, reason: serious.reason, t: +serious.t.toFixed(2) },
+    dur: +dur.toFixed(2),
+    maxPeople: cap,
+    serious: { won: serious.won, stars: serious.stars, kills: serious.kills, people: serious.people, firepower: serious.firepower, reason: serious.reason, t: +serious.t.toFixed(2) },
     edge: { won: edge.won, stars: edge.stars, people: edge.people, kills: edge.kills, reason: edge.reason },
     edgeLeft: { won: edgeLeft.won, reason: edgeLeft.reason, people: edgeLeft.people }
   });
 }
 
 const mainSrc = readFileSync(join(here, '../js/main.js'), 'utf8');
+const coreSrc = readFileSync(join(here, '../js/core.js'), 'utf8');
 const audioSrc = readFileSync(join(here, '../js/audio.js'), 'utf8');
 const html = readFileSync(join(here, '../index.html'), 'utf8');
+const simSrc = coreSrc.slice(coreSrc.indexOf('export function simulateLevel'), coreSrc.indexOf('export function levelProblems'));
+const applySrc = coreSrc.slice(coreSrc.indexOf('export function applyGate'), coreSrc.indexOf('export function shootGate'));
+const shootSrc = coreSrc.slice(coreSrc.indexOf('export function shootGate'), coreSrc.indexOf('export function damageZombie'));
+const createSrc = coreSrc.slice(coreSrc.indexOf('export function createLevelState'), coreSrc.indexOf('export function progress'));
+for (const snippet of [
+  'let people = capPeople(',
+  'people = capPeople(collideCost',
+  'people = capPeople(0',
+  'people = capPeople(next.people'
+]) {
+  assert(simSrc.includes(snippet), `simulateLevel missing ${snippet}`);
+}
+assert(applySrc.includes('capPeople('), 'applyGate caps people');
+assert(shootSrc.includes('clampGateValue'), 'shootGate caps face numbers');
+assert(createSrc.includes('capPeople('), 'createLevelState caps people');
+assert(mainSrc.includes('capPeople(collideCost'), 'main collide uses capPeople');
+assert(mainSrc.includes('capPeople(next.people'), 'main gate uses capPeople');
+assert(mainSrc.includes('shownPeople'), 'HUD reads the capped count');
 for (const banned of ['readableWave', 'showcaseHold', 'setTimeout', 'playerX * 0.08', 'clientX / innerWidth', 'innerWidth) * 2']) {
   assert(!mainSrc.includes(banned), `main.js still has ${banned}`);
 }
@@ -165,6 +257,8 @@ const summary = {
   l10Duration: rows[9].dur,
   seriousAllThreeStar: rows.every(r => r.serious.won && r.serious.stars === 3),
   edgeAllLose: rows.every(r => r.edge.won === false && r.edgeLeft.won === false),
+  peopleWithinCap: rows.every(r => r.serious.people <= r.maxPeople && r.edge.people <= r.maxPeople && r.edgeLeft.people <= r.maxPeople),
+  maxSeriousPeople: Math.max(...rows.map(r => r.serious.people)),
   rows
 };
 console.log('gate-runner core-test: OK');
