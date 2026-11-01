@@ -62,6 +62,9 @@ let targetX = 0;
 let heldPointer = null; // CSS clientX while the pointer is down; release keeps targetX
 let fireAcc = 0;
 let shake = 0;
+let shakeAmp = 0;
+let shakeLeft = 0;
+let shakeDur = 0;
 let bossIFrames = 0; // short invuln after boss bump
 let bossHold = 0;
 let holdingFinish = false;
@@ -76,13 +79,13 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.35;
+renderer.toneMappingExposure = 1.12;
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9ec9ff);
-scene.fog = new THREE.Fog(0xb7d7ff, 28, 95);
+scene.background = new THREE.Color(0x6490c0);
+scene.fog = new THREE.Fog(0x6e97c4, 34, 120);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
 camera.position.set(0, CAM_Y, -CAM_BACK);
@@ -90,7 +93,7 @@ camera.lookAt(0, CAM_LOOK_Y, 0.6);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.4, 0.96);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.24, 0.6);
 composer.addPass(bloom);
 
 const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.55);
@@ -124,6 +127,17 @@ const bulletGroup = new THREE.Group();
 world.add(bulletGroup);
 const fxGroup = new THREE.Group();
 world.add(fxGroup);
+const burstGeo = new THREE.SphereGeometry(0.09, 6, 5);
+const particles = [];
+const FX_CAP = 120;
+const KILL_SHAKE_AMP = 0.46;
+const KILL_SHAKE_DUR = 0.12;
+const BOSS_KILL_SHAKE_AMP = 1.04;
+const BOSS_KILL_SHAKE_DUR = 0.18;
+const CORPSE_DUR = 0.48;
+const BOSS_CORPSE_DUR = 0.72;
+const GATE_BOARDS_AHEAD = 3;
+const GATE_AHEAD_MAX = 90;
 
 const city = buildCity();
 scene.add(city);
@@ -383,12 +397,49 @@ function playReaction(enemy, names, thenNames) {
 function playDeath(enemy) {
   enemy.dead = true;
   enemy.animToken = (enemy.animToken || 0) + 1;
+  const dur = enemy.isBoss ? BOSS_CORPSE_DUR : CORPSE_DUR;
+  enemy.corpseT = dur;
+  enemy.deathDur = dur;
+  enemy.deathAge = 0;
+  enemy.clipDone = false;
+  enemy.knockFromX = enemy.root?.position.x ?? enemy.x;
+  enemy.knockFromZ = enemy.root?.position.z ?? enemy.z;
+  enemy.knockFromY = enemy.root?.position.y ?? enemy.groundY ?? 0;
+  const side = Math.sign((enemy.x || 0) - playerX) || 1;
+  enemy.knockX = side * (enemy.isBoss ? 0.95 : 0.62);
+  enemy.knockZ = enemy.isBoss ? 1.85 : 1.25;
+  if (enemy.root) enemy.root.visible = true;
   const act = playAnim(enemy.actions, ['Death'], 0.08, 'once');
+  if (!act) {
+    enemy.clipDone = true;
+    return;
+  }
   afterClip(enemy, act, () => {
-    if (enemy.root) enemy.root.visible = false;
+    enemy.clipDone = true;
+    if (enemy.corpseT <= 0 && enemy.root) enemy.root.visible = false;
   });
-  // No clip (fallback capsule): count down in the frame loop, not a timer.
-  if (!act) enemy.corpseT = 0.6;
+}
+
+/** dt knockback. Hide only after the minimum hold and the clip end (or no clip). */
+function stepCorpses(dt) {
+  for (const z of zombies) {
+    if (!z.dead || !z.root) continue;
+    if (z.corpseT > 0) {
+      z.deathAge = (z.deathAge || 0) + dt;
+      z.corpseT -= dt;
+      const dur = Math.max(0.001, z.deathDur || CORPSE_DUR);
+      const u = Math.min(1, z.deathAge / dur);
+      const ease = 1 - (1 - u) * (1 - u);
+      z.root.visible = true;
+      z.root.position.x = z.knockFromX + (z.knockX || 0) * ease;
+      z.root.position.z = z.knockFromZ + (z.knockZ || 0) * ease;
+      z.root.position.y = z.knockFromY + Math.sin(u * Math.PI) * (z.isBoss ? 0.42 : 0.28);
+      z.root.rotation.x = -1.15 * ease;
+      if (z.corpseT <= 0 && z.clipDone) z.root.visible = false;
+    } else if (z.clipDone) {
+      z.root.visible = false;
+    }
+  }
 }
 
 function buildCity() {
@@ -579,28 +630,43 @@ function makeGateVisual(gate, side) {
   const mat = new THREE.MeshStandardMaterial({
     color: colors.color,
     emissive: colors.emissive,
-    emissiveIntensity: 0.7,
+    emissiveIntensity: 1.35,
     transparent: true,
-    opacity: 0.82,
+    opacity: 0.88,
     roughness: 0.35,
     metalness: 0.08,
     side: THREE.DoubleSide
   });
+  mat.fog = false;
   const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.4), mat);
   panel.position.y = 1.35;
   group.add(panel);
-  const frame = new THREE.Mesh(
-    new THREE.BoxGeometry(w + 0.18, 2.58, 0.14),
-    new THREE.MeshStandardMaterial({
-      color: colors.frame,
-      emissive: colors.emissive,
-      emissiveIntensity: 0.45,
-      roughness: 0.45,
-      metalness: 0.15
-    })
-  );
+  const frameMat = new THREE.MeshStandardMaterial({
+    color: colors.frame,
+    emissive: colors.frame,
+    emissiveIntensity: 2.6,
+    roughness: 0.32,
+    metalness: 0.04,
+    toneMapped: false
+  });
+  frameMat.fog = false;
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 2.58, 0.14), frameMat);
   frame.position.y = 1.35;
   group.add(frame);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: colors.frame,
+    transparent: true,
+    opacity: 0.55,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false
+  });
+  glowMat.fog = false;
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.9, 3.25), glowMat);
+  glow.position.set(0, 1.35, -0.16);
+  glow.name = 'gateGlow';
+  group.add(glow);
 
   const labelEl = document.createElement('div');
   labelEl.className = 'gate-num';
@@ -616,6 +682,7 @@ function makeGateVisual(gate, side) {
     const sx = (2.6 * (g.widthScale || 1)) / 2.6;
     panel.scale.x = sx;
     frame.scale.x = sx;
+    glow.scale.x = sx;
   };
   return group;
 }
@@ -842,6 +909,106 @@ function spawnBullet(origin, dir, damage) {
   });
 }
 
+function gateBurstColor(op) {
+  switch (op) {
+    case 'mul': return 0xff7a18;
+    case 'fireMul': return 0xd2b0ff;
+    case 'fire': return 0xff5a3d;
+    case 'sub': return 0xff3b5c;
+    case 'add':
+    default: return 0xffe14a;
+  }
+}
+
+function clearParticles() {
+  while (particles.length) {
+    const p = particles.pop();
+    fxGroup.remove(p.mesh);
+    p.mesh.material.dispose();
+  }
+}
+
+function spawnBurst(x, y, z, color, count, life) {
+  const need = Math.max(1, count | 0);
+  while (particles.length + need > FX_CAP && particles.length) {
+    const old = particles.shift();
+    fxGroup.remove(old.mesh);
+    old.mesh.material.dispose();
+  }
+  const n = Math.min(need, FX_CAP);
+  for (let i = 0; i < n; i++) {
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 1,
+      depthWrite: false,
+      toneMapped: false
+    });
+    mat.fog = false;
+    const mesh = new THREE.Mesh(burstGeo, mat);
+    const ang = (i / n) * Math.PI * 2 + (i % 3) * 0.2;
+    const speed = 1.4 + (i % 5) * 0.36;
+    mesh.position.set(x + Math.cos(ang) * 0.18, y + (i % 5) * 0.1, z + Math.sin(ang) * 0.12);
+    fxGroup.add(mesh);
+    const maxLife = Math.max(0.45, life + (i % 4) * 0.03);
+    particles.push({
+      mesh,
+      vx: Math.cos(ang) * speed,
+      vy: 1.7 + (i % 4) * 0.42,
+      vz: Math.sin(ang) * speed * 0.42,
+      life: maxLife,
+      maxLife
+    });
+  }
+}
+
+function spawnGateBurst(gate) {
+  spawnBurst(gate.x, 1.3, gate.z, gateBurstColor(gate.op), 16, 0.5);
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) {
+      fxGroup.remove(p.mesh);
+      p.mesh.material.dispose();
+      particles.splice(i, 1);
+      continue;
+    }
+    p.mesh.position.x += p.vx * dt;
+    p.mesh.position.y += p.vy * dt;
+    p.mesh.position.z += p.vz * dt;
+    p.vy -= 2.6 * dt;
+    p.mesh.material.opacity = Math.max(0, p.life / p.maxLife);
+  }
+}
+
+function addShake(amp, dur) {
+  if (!(amp > 0) || !(dur > 0)) return;
+  if (amp >= shakeAmp) {
+    shakeAmp = amp;
+    shakeDur = dur;
+    shakeLeft = dur;
+    shake = amp;
+  }
+}
+
+function decayShake(dt) {
+  if (shakeLeft <= 0) {
+    shake = 0;
+    shakeAmp = 0;
+    shakeDur = 0;
+    return;
+  }
+  shakeLeft = Math.max(0, shakeLeft - dt);
+  shake = shakeDur > 0 ? shakeAmp * (shakeLeft / shakeDur) : 0;
+  if (shakeLeft <= 0) {
+    shake = 0;
+    shakeAmp = 0;
+  }
+}
+
 function spawnFloat(text, pos, color = '#fff', opts = {}) {
   if (opts.gate) {
     for (let i = floats.length - 1; i >= 0; i--) {
@@ -862,7 +1029,8 @@ function spawnFloat(text, pos, color = '#fff', opts = {}) {
   el.textContent = text;
   el.style.cssText = `position:absolute;left:0;top:0;transform:translate(-50%,-50%);color:${color};font-weight:800;font-size:20px;text-shadow:0 2px 8px rgba(0,0,0,.45);pointer-events:none;`;
   document.getElementById('hud').appendChild(el);
-  floats.push({ el, pos: pos.clone(), life: opts.gate ? 0.55 : 0.8, vy: 1.2, gate: !!opts.gate });
+  const life = opts.gate ? 0.64 : 0.8;
+  floats.push({ el, pos: pos.clone(), life, maxLife: life, vy: 1.7, gate: !!opts.gate });
 }
 
 function updateFloats(dt) {
@@ -876,7 +1044,7 @@ function updateFloats(dt) {
     const y = (-v.y * 0.5 + 0.5) * h;
     f.el.style.left = `${x}px`;
     f.el.style.top = `${y}px`;
-    f.el.style.opacity = String(Math.max(0, f.life / 0.8));
+    f.el.style.opacity = String(Math.max(0, f.life / (f.maxLife || 0.8)));
     if (f.life <= 0) {
       f.el.remove();
       floats.splice(i, 1);
@@ -884,31 +1052,32 @@ function updateFloats(dt) {
   }
 }
 
-/** Nearest gate pair keeps its HTML digits. Farther pairs stay hidden. */
+/** Next 2–3 gate pairs keep their 3D boards. HTML digits mark only the nearest pair. */
 function updateGateLabels() {
   const w = innerWidth, h = innerHeight;
   const zNow = state ? state.z : 0;
-  const MAX_AHEAD = 18;
   const pairMap = new Map();
   for (const g of gates) {
     if (g.consumed || g.op === 'finish') continue;
     const dz = g.z - zNow;
-    if (dz < -1.2 || dz > MAX_AHEAD) continue;
+    if (dz < -1.2 || dz > GATE_AHEAD_MAX) continue;
     const key = Math.round(g.z * 10) / 10;
     if (!pairMap.has(key)) pairMap.set(key, []);
     pairMap.get(key).push(g);
   }
-  const nearestZs = [...pairMap.keys()].sort((a, b) => a - b).slice(0, 1);
-  const show = new Set(nearestZs);
+  const aheadZs = [...pairMap.keys()].sort((a, b) => a - b);
+  const boards = new Set(aheadZs.slice(0, GATE_BOARDS_AHEAD));
+  const labelZ = aheadZs.length ? aheadZs[0] : null;
 
   for (const g of gates) {
     if (g.op === 'finish') continue;
     const key = Math.round(g.z * 10) / 10;
-    const isNearest = show.has(key) && !g.consumed;
-    if (g.visual && !g.consumed) g.visual.visible = !!isNearest;
+    const showBoard = boards.has(key) && !g.consumed;
+    if (g.visual && !g.consumed) g.visual.visible = showBoard;
     const el = g.visual?.userData?.labelEl;
     if (!el) continue;
-    const allowed = isNearest && running && g.visual.visible !== false;
+    const isNearest = labelZ != null && key === labelZ && !g.consumed;
+    const allowed = isNearest && running && g.visual && g.visual.visible !== false;
     if (!allowed) {
       el.style.display = 'none';
       continue;
@@ -947,7 +1116,8 @@ function resetRun() {
   mixers.length = 0;
   level = levels[levelIndex];
   state = createLevelState(level);
-  playerX = 0; targetX = 0; fireAcc = 0; shake = 0; bossIFrames = 0;
+  playerX = 0; targetX = 0; fireAcc = 0; shake = 0; shakeAmp = 0; shakeLeft = 0; shakeDur = 0; bossIFrames = 0;
+  clearParticles();
   bullets.splice(0).forEach(b => bulletGroup.remove(b.mesh));
   while (bulletGroup.children.length) bulletGroup.remove(bulletGroup.children[0]);
   floats.splice(0).forEach(f => f.el.remove());
@@ -1118,10 +1288,6 @@ function update(dt) {
   else state.z += level.runSpeed * dt;
 
   for (const z of zombies) {
-    if (z.corpseT > 0) {
-      z.corpseT -= dt;
-      if (z.corpseT <= 0 && z.root) z.root.visible = false;
-    }
     if (z.dead) continue;
     if (z.isBoss) {
       const step = stepBossZ(z.z, z.homeZ ?? z.z, state.z, z.engaged, dt, holdingFinish);
@@ -1171,14 +1337,15 @@ function update(dt) {
           spawnFloat(`-${b.damage}`, new THREE.Vector3(z.x, 1.8, z.z), '#d7ffe0');
           if (dmg.dead) {
             playDeath(z);
+            spawnBurst(z.x, 1.4, z.z, z.isBoss ? 0xffd27a : 0xfff1c2, z.isBoss ? 14 : 10, 0.48);
             state.kills += 1;
             state.score += z.isBoss ? (200 + b.damage * 5) : (20 + b.damage * 2);
             if (z.isBoss) {
               state.bossDefeated = true;
               banner.textContent = z.mini ? '迷你龙倒下！' : '巨龙倒下！';
-              shake = Math.max(shake, 0.9);
+              addShake(BOSS_KILL_SHAKE_AMP, BOSS_KILL_SHAKE_DUR);
             } else {
-              shake = Math.max(shake, 0.4);
+              addShake(KILL_SHAKE_AMP, KILL_SHAKE_DUR);
             }
             if (z.hpBar) { z.hpBar.remove(); z.hpBar = null; }
             audio.playDeath();
@@ -1211,10 +1378,11 @@ function update(dt) {
       const before = state.people;
       state.people = capPeople(collideCost(state.people, z.hp, { boss: !!z.isBoss, mini: !!z.mini }), level);
       const lost = Math.max(0, before - state.people);
-      shake = Math.max(shake, z.isBoss ? 0.85 : 0.55);
+      addShake(z.isBoss ? 0.7 : 0.5, z.isBoss ? 0.16 : 0.12);
       if (lost > 0) {
         audio.playLosePeople();
         spawnFloat(`-${lost}`, new THREE.Vector3(z.x, 2, z.z), '#ff6b8a');
+        spawnBurst(playerX, 1.5, state.z, 0xff3b5c, 10, 0.48);
       }
       if (!z.isBoss) {
         playDeath(z);
@@ -1249,13 +1417,14 @@ function update(dt) {
       state.people = capPeople(next.people, level);
       state.firepower = next.firepower;
       state.score += 50 + Math.max(0, state.people - beforeP) * 5 + Math.max(0, state.firepower - beforeF) * 20;
-      shake = Math.max(shake, 0.35);
+      addShake(0.32, 0.1);
       if (g.op === 'sub') audio.playGateDown();
       else audio.playGateUp();
       let msg = gateLabelText(g);
       if (g.op === 'add' || g.op === 'mul') msg = `人数${gateLabelText(g)}`;
       if (g.op === 'fire' || g.op === 'fireMul') msg = `火力${g.op === 'fireMul' ? '×' : '+'}${g.value}`;
       spawnFloat(msg, new THREE.Vector3(g.x, 2.4, g.z), '#fff', { gate: true });
+      spawnGateBurst(g);
       hideGateVisual(g);
     } else {
       g.consumed = true;
@@ -1307,7 +1476,9 @@ function render() {
   if (running && state) steerFromPointer();
   update(dt);
 
-  shake = Math.max(0, shake - dt * 1.8);
+  stepCorpses(dt);
+  updateParticles(dt);
+  decayShake(dt);
   const { camX, camY, camZ } = poseCamera();
 
   const z0 = state ? state.z : 0;
@@ -1363,6 +1534,8 @@ function updateDebugOverlay(camX, camY, camZ) {
     enemyLine = `enemy min.y=${box.min.y.toFixed(3)} gy=${(live.groundY ?? 0).toFixed(3)} z=${live.z.toFixed(1)}`;
   }
   debugEl.textContent = `cam (${camX.toFixed(2)}, ${camY.toFixed(2)}, ${camZ.toFixed(2)})\n${enemyLine}`;
+  const zNow = state ? state.z : 0;
+  const liveBoards = gates.filter(g => g.op !== 'finish' && !g.consumed && g.visual?.visible).length;
   window.__grDbg = {
     cam: { x: camX, y: camY, z: camZ },
     targetX, playerX,
@@ -1377,7 +1550,22 @@ function updateDebugOverlay(camX, camY, camZ) {
         size: [+size.x.toFixed(2), +size.y.toFixed(2), +size.z.toFixed(2)]
       };
     }),
-    squad: squad.map(s => ({ scale: +s.root.scale.x.toFixed(3), y: +s.root.position.y.toFixed(3), gy: s.groundY }))
+    squad: squad.map(s => ({ scale: +s.root.scale.x.toFixed(3), y: +s.root.position.y.toFixed(3), gy: s.groundY })),
+    juice: {
+      z: +zNow.toFixed(2),
+      fx: fxGroup.children.length,
+      particles: particles.length,
+      shake: +shake.toFixed(3),
+      bloom: { strength: bloom.strength, radius: bloom.radius, threshold: bloom.threshold },
+      boards: liveBoards / 2,
+      labels: [...document.querySelectorAll('.gate-num')].filter(el => el.style.display === 'block').length,
+      corpses: zombies.filter(z => z.dead).map(z => ({
+        boss: !!z.isBoss,
+        corpseT: +z.corpseT.toFixed(3),
+        visible: z.root?.visible !== false,
+        age: +(z.deathAge || 0).toFixed(3)
+      }))
+    }
   };
 }
 
