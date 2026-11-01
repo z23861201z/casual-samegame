@@ -141,8 +141,8 @@ world.add(bulletGroup);
 const fxGroup = new THREE.Group();
 world.add(fxGroup);
 const burstGeo = new THREE.SphereGeometry(0.09, 6, 5);
-const flashPlaneGeo = new THREE.PlaneGeometry(1, 1);
-const flashSparkGeo = new THREE.SphereGeometry(0.2, 7, 6);
+// Short muzzle bar. Uniform scale stays ≤ 0.35 — never a camera-facing plane.
+const flashStreakGeo = new THREE.BoxGeometry(0.4, 0.16, 1.05);
 const particles = [];
 const FX_CAP = 120;
 const KILL_SHAKE_AMP = 3.8;
@@ -157,7 +157,6 @@ const POSE_HOLD_SEC = 0.32;
 const CORPSE_LIE_X = 1.2;
 const GATE_BOARDS_AHEAD = 3;
 const GATE_CLOSE_Z = 14;
-const GATE_FLASH_NEAR = 6;
 const GATE_EMISSIVE = 0.04;
 const GATE_GLASS_OPACITY = 0.58;
 const GATE_STACK_Y = 0.8;
@@ -1112,6 +1111,8 @@ function spawnBurst(x, y, z, color, count, life) {
       transparent: true,
       opacity: 1,
       depthWrite: false,
+      depthTest: true,
+      blending: THREE.NormalBlending,
       toneMapped: false
     });
     mat.fog = false;
@@ -1145,82 +1146,58 @@ function evictParticles(need) {
   }
 }
 
-function nearestGateGap() {
-  if (!state) return Infinity;
-  let best = Infinity;
+/** True while any live gate is inside the close band (same band as the fill hide). */
+function gateInCloseBand() {
+  if (!state) return false;
+  const zNow = state.z;
   for (const g of gates) {
-    if (g.op === 'finish' || g.consumed) continue;
-    const dz = Math.abs(g.z - state.z);
-    if (dz < best) best = dz;
+    if (g.consumed || g.op === 'finish') continue;
+    const dz = g.z - zNow;
+    if (dz < GATE_CLOSE_Z && dz > -2.5) return true;
   }
-  return best;
+  return false;
 }
 
-function spawnMuzzleFlash(origin) {
-  const x = origin.x;
-  const y = origin.y;
-  const z = origin.z;
-  const nearGate = nearestGateGap() < GATE_CLOSE_Z;
-  if (nearGate) {
-    // No additive billboard in the gate mouth. Stacked flashes were a second white slab.
-    evictParticles(1);
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xffb060,
-      transparent: true,
-      opacity: 0.32,
-      depthWrite: false,
-      depthTest: true,
-      toneMapped: true,
-      blending: THREE.NormalBlending,
-      side: THREE.DoubleSide
-    });
-    mat.fog = false;
-    const spark = new THREE.Mesh(flashSparkGeo, mat);
-    spark.position.set(x, y, z + 0.08);
-    spark.scale.setScalar(0.16);
-    spark.renderOrder = 3;
-    fxGroup.add(spark);
-    particles.push({
-      mesh: spark, vx: 0, vy: 0.2, vz: 0.35, life: 0.06, maxLife: 0.06, flash: true, baseScale: 0.16
-    });
-    return;
+function clearFlashParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    if (!p.flash) continue;
+    fxGroup.remove(p.mesh);
+    p.mesh.material.dispose();
+    particles.splice(i, 1);
   }
-  const scaleMul = nearestGateGap() < GATE_FLASH_NEAR ? 0.35 : 1;
-  const dim = nearestGateGap() < GATE_FLASH_NEAR ? 0.45 : 1;
-  evictParticles(3);
-  const makeMat = (color, opacity) => {
-    const mat = new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity,
-      depthWrite: false,
-      depthTest: false,
-      toneMapped: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide
-    });
-    mat.fog = false;
-    return mat;
-  };
-  const push = (mesh, life, baseScale) => {
-    mesh.scale.setScalar(baseScale);
-    mesh.renderOrder = 3;
-    fxGroup.add(mesh);
-    particles.push({
-      mesh, vx: 0, vy: 0, vz: 0.8, life, maxLife: life, flash: true, baseScale
-    });
-  };
-  // Wide disc at the muzzle, high enough to clear the helmet from the chase cam.
-  // Within 6m of a gate the flash shrinks and dims so it does not white out the board.
-  const core = new THREE.Mesh(flashPlaneGeo, makeMat(0xfff8d0, dim));
-  core.position.set(x, y, z);
-  push(core, 0.1, 1.55 * scaleMul);
-  const halo = new THREE.Mesh(flashPlaneGeo, makeMat(0xff6a00, 0.98 * dim));
-  halo.position.set(x, y, z - 0.04);
-  push(halo, 0.13, 2.45 * scaleMul);
-  const spark = new THREE.Mesh(flashSparkGeo, makeMat(0xfff1a8, dim));
-  spark.position.set(x, y, z + 0.14);
-  push(spark, 0.11, 1.45 * scaleMul);
+}
+
+/** Depth-tested short bar only. Scale stays ≤ 0.35. No additive billboard. */
+function spawnMuzzleSpark(origin, close) {
+  evictParticles(1);
+  const scale = close ? 0.16 : 0.32;
+  const mat = new THREE.MeshBasicMaterial({
+    color: close ? 0xffb060 : 0xffc56a,
+    transparent: true,
+    opacity: close ? 0.5 : 0.85,
+    depthWrite: false,
+    depthTest: true,
+    toneMapped: true,
+    blending: THREE.NormalBlending
+  });
+  mat.fog = false;
+  const spark = new THREE.Mesh(flashStreakGeo, mat);
+  spark.position.set(origin.x, origin.y, origin.z + 0.12);
+  spark.scale.setScalar(scale);
+  spark.renderOrder = 2;
+  fxGroup.add(spark);
+  const life = close ? 0.05 : 0.08;
+  particles.push({
+    mesh: spark,
+    vx: 0,
+    vy: 0.04,
+    vz: 0.5,
+    life,
+    maxLife: life,
+    flash: true,
+    baseScale: scale
+  });
 }
 
 function updateParticles(dt) {
@@ -1238,8 +1215,8 @@ function updateParticles(dt) {
     p.mesh.position.z += p.vz * dt;
     const k = Math.max(0, p.life / p.maxLife);
     if (p.flash) {
-      p.mesh.material.opacity = k;
-      if (p.baseScale) p.mesh.scale.setScalar(p.baseScale * (0.72 + 0.5 * k));
+      p.mesh.material.opacity = 0.85 * k;
+      if (p.baseScale) p.mesh.scale.setScalar(Math.min(0.35, p.baseScale * (0.7 + 0.3 * k)));
     } else {
       p.vy -= 2.6 * dt;
       p.mesh.material.opacity = k;
@@ -1520,9 +1497,12 @@ function tryFire() {
   const guns = squad.length
     ? squad.map(s => new THREE.Vector3(s.root.position.x + 0.38, 1.42, s.root.position.z - 0.15))
     : [origin];
-  const nearGate = nearestGateGap() < GATE_CLOSE_Z;
-  const flashGuns = nearGate ? guns.slice(0, 1) : guns.slice(0, 4);
-  for (const g of flashGuns) spawnMuzzleFlash(g);
+  if (gateInCloseBand()) {
+    clearFlashParticles();
+    spawnMuzzleSpark(guns[0] || origin, true);
+    return;
+  }
+  for (const g of guns.slice(0, 4)) spawnMuzzleSpark(g, false);
 }
 
 function onResize() {
@@ -1674,6 +1654,7 @@ function update(dt) {
 
   const fs = fireStats(shownPeople(), state.firepower);
   fireAcc += dt;
+  if (gateInCloseBand()) clearFlashParticles();
   if (fireAcc >= fs.interval) tryFire();
 
   for (let i = bullets.length - 1; i >= 0; i--) {
@@ -1912,6 +1893,13 @@ function updateDebugOverlay(camX, camY, camZ) {
       jump(z) { if (state) state.z = z; },
       fire(n) { if (state) state.firepower = Math.max(1, n | 0); },
       people(n) { if (state && level) { state.people = capPeople(n, level); syncSquadCount(); } },
+      setLane(x) {
+        const n = Number(x);
+        if (!Number.isFinite(n) || !level) return playerX;
+        targetX = clampLane(n, level.roadHalfWidth);
+        playerX = targetX;
+        return playerX;
+      },
       killFront() {
         const zNow = state ? state.z : 0;
         const live = zombies.filter(z => !z.dead && !z.isBoss)
@@ -1991,7 +1979,9 @@ function updateDebugOverlay(camX, camY, camZ) {
     juice: {
       z: +zNow.toFixed(2),
       fx: fxGroup.children.length,
+      fxVisible: fxGroup.visible,
       particles: particles.length,
+      flashes: particles.filter(p => p.flash).length,
       shake: +shake.toFixed(3),
       bloom: { strength: bloom.strength, radius: bloom.radius, threshold: bloom.threshold, enabled: bloom.enabled },
       lie: zombies.filter(z => z.dead && !z.isBoss).map(z => ({

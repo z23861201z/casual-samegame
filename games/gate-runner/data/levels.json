@@ -2043,8 +2043,8 @@
       {
         "z": 26,
         "type": "zombies",
-        "count": 5,
-        "hp": 8,
+        "count": 4,
+        "hp": 4,
         "kind": "zombie",
         "block": "full"
       },
@@ -2087,8 +2087,8 @@
       {
         "z": 74,
         "type": "zombies",
-        "count": 5,
-        "hp": 8,
+        "count": 4,
+        "hp": 4,
         "kind": "demon",
         "block": "full"
       },
