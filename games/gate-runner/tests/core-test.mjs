@@ -26,7 +26,7 @@ assert(applyGate(3, 1, { op: 'fire', value: 2 }).firepower === 3, 'fire add');
 assert(applyGate(3, 2, { op: 'fireMul', value: 2 }).firepower === 4, 'fire mul');
 
 assert(DEFAULT_MAX_PEOPLE === 80, 'default maxPeople is 80');
-assert(MAX_GATE_LINEAR <= 99 && MAX_GATE_LINEAR >= 12, 'add/sub/fire face cap stays readable');
+assert(MAX_GATE_LINEAR <= 36 && MAX_GATE_LINEAR >= 24, 'add/sub/fire face cap stays in the 24-36 band');
 assert(MAX_GATE_MUL === 5, 'mul face cap stays 5');
 assert(maxPeopleFor(null) === 80, 'missing level uses 80');
 assert(maxPeopleFor({ maxPeople: 40 }) === 40, 'level maxPeople');
@@ -42,7 +42,8 @@ assert(40 * 5 > DEFAULT_MAX_PEOPLE, 'mul fixture exceeds the cap');
 assert(applyGate(40, 1, { op: 'mul', value: 5 }).people === 80, 'mul cannot break 80');
 assert(applyGate(40, 1, { op: 'mul', value: 5 }, { maxPeople: 36 }).people === 36, 'mul respects level maxPeople');
 assert(applyGate(70, 1, { op: 'add', value: 50 }).people === 80, 'add respects cap');
-assert(applyGate(6, 1, { op: 'add', value: 100000 }).people === 80, 'astronomical add cannot pass the cap');
+assert(applyGate(6, 1, { op: 'add', value: 100000 }).people === 6 + MAX_GATE_LINEAR, 'face cap limits one add');
+assert(applyGate(70, 1, { op: 'add', value: 100000 }).people === 80, 'astronomical add cannot pass the people cap');
 assert(applyGate(40, 1, { op: 'sub', value: 3 }, { maxPeople: 40 }).people === 37, 'sub under the cap');
 assert(applyGate(2, 1, { op: 'sub', value: 99 }).people === 1, 'sub floor still 1');
 assert(applyGate(0, 1, { op: 'sub', value: 4 }).people === 1, 'sub does not leave 0');
@@ -60,7 +61,9 @@ assert(g.hp === 6, 'gate hp');
 assert(g.value >= 1 && g.value <= MAX_GATE_LINEAR, 'gate value');
 
 const raised = shootGate({ op: 'add', value: 6, hp: 40 }, 4, () => 0);
-assert(raised.value > 6 && raised.value <= 99, 'one burst raises add under the ceiling');
+assert(raised.value > 6 && raised.value <= MAX_GATE_LINEAR, 'one burst raises add under the ceiling');
+const heavy = shootGate({ op: 'add', value: 6, hp: 80 }, 12, () => 0);
+assert(heavy.value === 7, 'a heavy hit adds one, not damage/2');
 
 function hammer(op, value) {
   let gate = { op, value, hp: 9000 };
@@ -73,7 +76,8 @@ const fireFace = hammer('fire', 1);
 assert(addFace.value === MAX_GATE_LINEAR && addFace.value <= 99, `add face ${addFace.value}`);
 assert(subFace.value === MAX_GATE_LINEAR && subFace.value <= 99, `sub face ${subFace.value}`);
 assert(fireFace.value === MAX_GATE_LINEAR && fireFace.value <= 99, `fire face ${fireFace.value}`);
-assert(applyGate(6, 1, addFace).people === 80, 'passing a maxed add gate fills to 80 and stops');
+assert(applyGate(6, 1, addFace).people === 6 + MAX_GATE_LINEAR, 'passing a maxed add gate stops at the face cap');
+assert(applyGate(79, 1, addFace).people === 80, 'maxed add still cannot break the people cap');
 assert(applyGate(50, 1, { op: 'mul', value: hammer('mul', 2).value }).people <= 80, 'shot mul still caps people');
 
 let mulFace = { op: 'mul', value: 2, hp: 40 };
@@ -211,6 +215,10 @@ for (const lv of levels) {
   assert(probs.length === 0, `L${lv.id} contract: ${probs.join('; ')}`);
   const dur = durationSeconds(lv);
   assert(Math.abs(dur - DURATION[lv.id]) < 1e-9, `L${lv.id} duration changed to ${dur}`);
+  const finEv = lv.events.find(e => e.type === 'finish');
+  const lastZ = Math.max(...lv.events.filter(e => e.type !== 'finish').map(e => e.z));
+  const tail = (finEv.z - lastZ) / lv.runSpeed;
+  assert(tail <= 2.2, `L${lv.id} empty tail ${tail.toFixed(2)}s`);
   const cap = specCap(lv);
   assert(maxPeopleFor(lv) === cap, `maxPeopleFor L${lv.id}`);
   const serious = simulateLevel(lv, 'serious');

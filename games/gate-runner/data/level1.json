@@ -101,6 +101,116 @@
       "spread": 1.3
     },
     {
+      "z": 94,
+      "type": "gatePair",
+      "left": {
+        "op": "add",
+        "value": 4,
+        "hp": 16
+      },
+      "right": {
+        "op": "sub",
+        "value": 2,
+        "hp": 12
+      }
+    },
+    {
+      "z": 98,
+      "type": "zombies",
+      "count": 4,
+      "hp": 4,
+      "kind": "zombie-half",
+      "block": "full"
+    },
+    {
+      "z": 112,
+      "type": "gatePair",
+      "left": {
+        "op": "fire",
+        "value": 1,
+        "hp": 14
+      },
+      "right": {
+        "op": "sub",
+        "value": 2,
+        "hp": 12
+      }
+    },
+    {
+      "z": 116,
+      "type": "zombies",
+      "count": 3,
+      "hp": 4,
+      "kind": "big-arm",
+      "spread": 1.3
+    },
+    {
+      "z": 130,
+      "type": "gatePair",
+      "left": {
+        "op": "add",
+        "value": 4,
+        "hp": 16
+      },
+      "right": {
+        "op": "sub",
+        "value": 2,
+        "hp": 12
+      }
+    },
+    {
+      "z": 134,
+      "type": "zombies",
+      "count": 4,
+      "hp": 4,
+      "kind": "orc",
+      "block": "full"
+    },
+    {
+      "z": 148,
+      "type": "gatePair",
+      "left": {
+        "op": "fire",
+        "value": 1,
+        "hp": 14
+      },
+      "right": {
+        "op": "sub",
+        "value": 2,
+        "hp": 12
+      }
+    },
+    {
+      "z": 152,
+      "type": "zombies",
+      "count": 3,
+      "hp": 4,
+      "kind": "demon",
+      "spread": 1.3
+    },
+    {
+      "z": 166,
+      "type": "gatePair",
+      "left": {
+        "op": "add",
+        "value": 4,
+        "hp": 16
+      },
+      "right": {
+        "op": "sub",
+        "value": 2,
+        "hp": 12
+      }
+    },
+    {
+      "z": 170,
+      "type": "zombies",
+      "count": 4,
+      "hp": 4,
+      "kind": "yeti",
+      "block": "full"
+    },
+    {
       "z": 180,
       "type": "finish",
       "needPeople": 12

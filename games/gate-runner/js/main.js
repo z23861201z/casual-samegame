@@ -72,6 +72,7 @@ let bossHold = 0;
 let holdingFinish = false;
 let ended = false;
 let bossCamBlend = 0;
+let frameKills = 0;
 let clock = new THREE.Clock();
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
@@ -85,7 +86,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x5d86ad);
-scene.fog = new THREE.Fog(0x6a90b6, 20, 82);
+// Far enough that the 2nd and 3rd gate pairs (18m / 36m ahead) stay readable.
+scene.fog = new THREE.Fog(0x6a90b6, 40, 160);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
 camera.position.set(0, CAM_Y, -CAM_BACK);
@@ -93,7 +95,7 @@ camera.lookAt(0, CAM_LOOK_Y, 0.6);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.24, 0.6);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.48, 0.2, 0.64);
 composer.addPass(bloom);
 
 const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.55);
@@ -128,13 +130,15 @@ world.add(bulletGroup);
 const fxGroup = new THREE.Group();
 world.add(fxGroup);
 const burstGeo = new THREE.SphereGeometry(0.09, 6, 5);
+const flashPlaneGeo = new THREE.PlaneGeometry(1, 1);
+const flashSparkGeo = new THREE.SphereGeometry(0.2, 7, 6);
 const particles = [];
 const FX_CAP = 120;
-const KILL_SHAKE_AMP = 0.46;
-const KILL_SHAKE_DUR = 0.15;
-const BOSS_KILL_SHAKE_AMP = 1.04;
+const KILL_SHAKE_AMP = 1.5;
+const KILL_SHAKE_DUR = 0.13;
+const BOSS_KILL_SHAKE_AMP = 3.1;
 const BOSS_KILL_SHAKE_DUR = 0.18;
-const CORPSE_DUR = 0.66;
+const CORPSE_DUR = 0.7;
 const BOSS_CORPSE_DUR = 0.72;
 const GATE_BOARDS_AHEAD = 3;
 const GATE_AHEAD_MAX = 90;
@@ -407,17 +411,27 @@ function playDeath(enemy) {
   enemy.dead = true;
   enemy.animToken = (enemy.animToken || 0) + 1;
   const dur = enemy.isBoss ? BOSS_CORPSE_DUR : CORPSE_DUR;
-  enemy.corpseT = dur;
-  enemy.deathDur = dur;
+  // Same-frame kills fall in sequence so a whole row cannot pop out together.
+  const slot = enemy.isBoss ? 0 : (frameKills++ % 8);
+  const stagger = slot * 0.055;
+  enemy.corpseT = dur + stagger;
+  enemy.deathDur = dur + stagger;
   enemy.deathAge = 0;
+  enemy.fallDelay = stagger;
+  enemy.poseHold = 0;
   enemy.clipDone = false;
   enemy.knockFromX = enemy.root?.position.x ?? enemy.x;
   enemy.knockFromZ = enemy.root?.position.z ?? enemy.z;
   enemy.knockFromY = enemy.root?.position.y ?? enemy.groundY ?? 0;
-  const side = Math.sign((enemy.x || 0) - playerX) || 1;
-  enemy.knockX = side * (enemy.isBoss ? 0.95 : 0.62);
-  enemy.knockZ = enemy.isBoss ? 1.85 : 1.25;
-  if (enemy.root) enemy.root.visible = true;
+  const side = (slot % 2 === 0 ? 1 : -1) * (Math.sign((enemy.x || 0) - playerX) || 1);
+  enemy.knockSign = side || 1;
+  enemy.knockX = side * (enemy.isBoss ? 1.35 : 1.3);
+  enemy.knockZ = enemy.isBoss ? 0.85 : 0.45;
+  if (enemy.root) {
+    enemy.root.visible = true;
+    enemy.root.frustumCulled = false;
+    enemy.root.traverse((o) => { o.frustumCulled = false; });
+  }
   const act = playAnim(enemy.actions, ['Death'], 0.08, 'once');
   if (!act) {
     enemy.clipDone = true;
@@ -428,22 +442,30 @@ function playDeath(enemy) {
   });
 }
 
-/** dt knockback. Hide only after the minimum hold and the clip end (or no clip). */
+/** dt knockback. corpseT > 0 stays visible; the downed pose renders one extra frame. */
 function stepCorpses(dt) {
   for (const z of zombies) {
     if (!z.dead || !z.root) continue;
     if (z.corpseT > 0) {
+      z.root.visible = true;
       z.deathAge = (z.deathAge || 0) + dt;
       z.corpseT -= dt;
-      const dur = Math.max(0.001, z.deathDur || CORPSE_DUR);
-      const u = Math.min(1, z.deathAge / dur);
-      const ease = 1 - (1 - u) * (1 - u);
-      z.root.visible = true;
+      const delay = z.fallDelay || 0;
+      const fallDur = Math.max(0.25, (z.deathDur || CORPSE_DUR) - delay);
+      const fallT = Math.max(0, (z.deathAge || 0) - delay);
+      const u = Math.min(1, fallT / fallDur);
+      const shown = fallT <= 0 ? 0.12 : Math.min(1, 0.3 + u * 0.7);
+      const ease = 1 - (1 - shown) * (1 - shown);
       z.root.position.x = z.knockFromX + (z.knockX || 0) * ease;
       z.root.position.z = z.knockFromZ + (z.knockZ || 0) * ease;
-      z.root.position.y = z.knockFromY + Math.sin(u * Math.PI) * (z.isBoss ? 0.42 : 0.28);
-      z.root.rotation.x = -1.15 * ease;
-      if (z.corpseT <= 0) z.root.visible = false;
+      const hop = Math.sin(Math.min(1, Math.max(u, 0.12)) * Math.PI) * (z.isBoss ? 0.65 : 0.58);
+      z.root.position.y = (z.knockFromY || 0) + hop;
+      z.root.rotation.z = (z.knockSign || 1) * (z.isBoss ? 0.95 : 1.3) * ease;
+      z.root.rotation.x = (z.isBoss ? 0.22 : 0.18) * ease;
+      if (z.corpseT <= 0) z.poseHold = 1;
+    } else if (z.poseHold) {
+      z.root.visible = true;
+      z.poseHold = 0;
     } else {
       z.root.visible = false;
     }
@@ -678,46 +700,50 @@ function gateSideColors(gate, side) {
     : { color: 0x2f8bff, emissive: 0x0a3a9a, frame: 0x7ec0ff, css: '#b8dcff' };
 }
 
+function gateBoardWidth(gate) {
+  const s = gate.widthScale || 1;
+  // Stay narrow enough that the next pair is visible over/beside this one.
+  return Math.min(2.35, 1.85 + Math.max(0, s - 0.55) * 0.42);
+}
+
 function makeGateVisual(gate, side) {
   const group = new THREE.Group();
   const colors = gateSideColors(gate, side);
-  const w = 2.6 * (gate.widthScale || 1);
+  const w = gateBoardWidth(gate);
   const mat = new THREE.MeshStandardMaterial({
     color: colors.color,
     emissive: colors.emissive,
-    emissiveIntensity: 0.46,
+    emissiveIntensity: 0.12,
     transparent: true,
-    opacity: 0.88,
-    roughness: 0.35,
-    metalness: 0.08,
+    opacity: 0.96,
+    roughness: 0.48,
+    metalness: 0.02,
     side: THREE.DoubleSide
   });
-  mat.fog = false;
-  const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.4), mat);
-  panel.position.y = 1.35;
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.2), mat);
+  // Toward the camera, in front of the rim, so the gate color is what you see.
+  panel.position.set(0, 1.32, -0.12);
   group.add(panel);
   const frameMat = new THREE.MeshStandardMaterial({
-    color: colors.frame,
-    emissive: colors.frame,
-    emissiveIntensity: 0.72,
-    roughness: 0.32,
+    color: colors.emissive,
+    emissive: colors.emissive,
+    emissiveIntensity: 0.16,
+    roughness: 0.4,
     metalness: 0.04
   });
-  frameMat.fog = false;
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.18, 2.58, 0.14), frameMat);
-  frame.position.y = 1.35;
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.16, 2.36, 0.1), frameMat);
+  frame.position.y = 1.32;
   group.add(frame);
   const glowMat = new THREE.MeshBasicMaterial({
-    color: colors.frame,
+    color: colors.color,
     transparent: true,
-    opacity: 0.24,
+    opacity: 0.1,
     depthWrite: false,
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending
   });
-  glowMat.fog = false;
-  const glow = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.9, 3.25), glowMat);
-  glow.position.set(0, 1.35, -0.16);
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.55, 2.7), glowMat);
+  glow.position.set(0, 1.32, 0.1);
   glow.name = 'gateGlow';
   group.add(glow);
 
@@ -732,7 +758,7 @@ function makeGateVisual(gate, side) {
   group.userData.redraw = (g) => {
     gate = g;
     labelEl.textContent = gateLabelText(g);
-    const sx = (2.6 * (g.widthScale || 1)) / 2.6;
+    const sx = gateBoardWidth(g) / w;
     panel.scale.x = sx;
     frame.scale.x = sx;
     glow.scale.x = sx;
@@ -783,6 +809,8 @@ function spawnEnemy(ev, i, count, forcedX = null) {
   // Quaternius glTF front is +Z. Math.PI turns that front toward the runner.
   root.rotation.y = Math.PI;
   root.visible = true;
+  root.frustumCulled = false;
+  root.traverse((o) => { o.frustumCulled = false; });
   const groundY = placeOnGround(root, x, z);
   entityGroup.add(root);
   if (bossLike || assetKey === 'dragonEvolved' || assetKey === 'demon') {
@@ -985,11 +1013,7 @@ function clearParticles() {
 
 function spawnBurst(x, y, z, color, count, life) {
   const need = Math.max(1, count | 0);
-  while (particles.length + need > FX_CAP && particles.length) {
-    const old = particles.shift();
-    fxGroup.remove(old.mesh);
-    old.mesh.material.dispose();
-  }
+  evictParticles(need);
   const n = Math.min(need, FX_CAP);
   for (let i = 0; i < n; i++) {
     const mat = new THREE.MeshBasicMaterial({
@@ -1021,6 +1045,54 @@ function spawnGateBurst(gate) {
   spawnBurst(gate.x, 1.3, gate.z, gateBurstColor(gate.op), Math.max(12, GATE_BURST_COUNT), 0.55);
 }
 
+function evictParticles(need) {
+  const n = Math.max(1, need | 0);
+  while (particles.length + n > FX_CAP && particles.length) {
+    const old = particles.shift();
+    fxGroup.remove(old.mesh);
+    old.mesh.material.dispose();
+  }
+}
+
+function spawnMuzzleFlash(origin) {
+  const x = origin.x;
+  const y = origin.y;
+  const z = origin.z;
+  evictParticles(3);
+  const makeMat = (color, opacity) => {
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      depthTest: false,
+      toneMapped: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide
+    });
+    mat.fog = false;
+    return mat;
+  };
+  const push = (mesh, life, baseScale) => {
+    mesh.scale.setScalar(baseScale);
+    mesh.renderOrder = 3;
+    fxGroup.add(mesh);
+    particles.push({
+      mesh, vx: 0, vy: 0, vz: 0.8, life, maxLife: life, flash: true, baseScale
+    });
+  };
+  // Wide disc at the muzzle, high enough to clear the helmet from the chase cam.
+  const core = new THREE.Mesh(flashPlaneGeo, makeMat(0xfff8d0, 1));
+  core.position.set(x, y, z);
+  push(core, 0.1, 1.55);
+  const halo = new THREE.Mesh(flashPlaneGeo, makeMat(0xff6a00, 0.98));
+  halo.position.set(x, y, z - 0.04);
+  push(halo, 0.13, 2.45);
+  const spark = new THREE.Mesh(flashSparkGeo, makeMat(0xfff1a8, 1));
+  spark.position.set(x, y, z + 0.14);
+  push(spark, 0.11, 1.45);
+}
+
 function updateParticles(dt) {
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
@@ -1034,8 +1106,14 @@ function updateParticles(dt) {
     p.mesh.position.x += p.vx * dt;
     p.mesh.position.y += p.vy * dt;
     p.mesh.position.z += p.vz * dt;
-    p.vy -= 2.6 * dt;
-    p.mesh.material.opacity = Math.max(0, p.life / p.maxLife);
+    const k = Math.max(0, p.life / p.maxLife);
+    if (p.flash) {
+      p.mesh.material.opacity = k;
+      if (p.baseScale) p.mesh.scale.setScalar(p.baseScale * (0.72 + 0.5 * k));
+    } else {
+      p.vy -= 2.6 * dt;
+      p.mesh.material.opacity = k;
+    }
   }
 }
 
@@ -1241,7 +1319,10 @@ function tryFire() {
     const dir = new THREE.Vector3(spread, 0.02, 1);
     spawnBullet(origin.clone().add(new THREE.Vector3(spread * 0.4, 0, 0)), dir, fs.damage);
   }
-  spawnBurst(origin.x, origin.y, origin.z + 0.35, 0xfff3c4, 5, 0.1);
+  const guns = squad.length
+    ? squad.map(s => new THREE.Vector3(s.root.position.x + 0.38, 1.42, s.root.position.z - 0.15))
+    : [origin];
+  for (const g of guns) spawnMuzzleFlash(g);
 }
 
 function onResize() {
@@ -1266,9 +1347,9 @@ function poseCamera(dt = 0) {
   const lookY = CAM_LOOK_Y + (BOSS_CAM_LOOK_Y - CAM_LOOK_Y) * u;
   const lookAhead = CAM_LOOK_AHEAD + (BOSS_CAM_LOOK_AHEAD - CAM_LOOK_AHEAD) * u;
   const z0 = state ? state.z : 0;
-  const camX = (Math.random() - 0.5) * shake * 0.25;
-  const camY = camHeight + (Math.random() - 0.5) * shake * 0.12;
-  const camZ = z0 - back;
+  const camX = (Math.random() - 0.5) * shake * 0.62;
+  const camY = camHeight + (Math.random() - 0.5) * shake * 0.32;
+  const camZ = z0 - back + (Math.random() - 0.5) * shake * 0.16;
   camera.position.set(camX, camY, camZ);
   camera.lookAt(camX, lookY, z0 + lookAhead);
   camera.updateMatrixWorld();
@@ -1343,6 +1424,7 @@ btnNext.onclick = () => {
 
 function update(dt) {
   if (!running || !state || !level) return;
+  frameKills = 0;
 
   playerX += (targetX - playerX) * Math.min(1, dt * PLAYER_SMOOTH);
   playerX = clampLane(playerX, level.roadHalfWidth);

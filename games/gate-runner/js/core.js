@@ -39,8 +39,11 @@ export const PLAYER_SMOOTH = 26;
 export const SERIOUS_LANE = 0.65;
 /** Squad ceiling when a level does not set `maxPeople`. */
 export const DEFAULT_MAX_PEOPLE = 80;
-/** add/sub/fire face numbers stay two digits. Width already saturates by value/20. */
-export const MAX_GATE_LINEAR = 99;
+/**
+ * add/sub/fire face numbers. Kept in a short band (~24–36) so a shot-up
+ * gate still reads as +24, not a smeared ±99. Width saturates by value/20.
+ */
+export const MAX_GATE_LINEAR = 28;
 /** mul / fireMul face numbers. Shooting may climb, never past this. */
 export const MAX_GATE_MUL = 5;
 
@@ -103,7 +106,7 @@ export function capPeople(people, level) {
   return n;
 }
 
-/** Face-number ceiling. mul/fireMul ≤ 5. add/sub/fire ≤ 99. Other ops stay ≥ 1. */
+/** Face-number ceiling. mul/fireMul ≤ 5. add/sub/fire ≤ MAX_GATE_LINEAR. Other ops stay ≥ 1. */
 export function clampGateValue(op, value) {
   const raw = Number.isFinite(value) ? value : 1;
   const n = Math.max(1, Math.floor(raw));
@@ -131,8 +134,9 @@ export function shootGate(gate, damage, rng = Math.random) {
   const hp = Math.max(0, (gate.hp ?? 0) - damage);
   let value = gate.value;
   if (gate.op === 'add' || gate.op === 'sub' || gate.op === 'fire') {
-    const bump = Math.max(1, Math.floor(Math.max(0, damage) / 2));
-    value = (gate.value || 1) + bump;
+    // +1 per connecting shot. floor(damage/2) used to run the digits to the
+    // cap before the squad reached the gate.
+    if (damage > 0) value = (gate.value || 1) + 1;
   } else if (gate.op === 'mul' || gate.op === 'fireMul') {
     if (damage > 0 && rng() < 0.15) value = (gate.value || 2) + 1;
   }
