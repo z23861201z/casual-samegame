@@ -86,8 +86,8 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x5d86ad);
-// Far enough that the 2nd and 3rd gate pairs (18m / 36m ahead) stay readable.
-scene.fog = new THREE.Fog(0x6a90b6, 40, 160);
+// 2nd/3rd pairs sit ~32–70m from the camera. Start fog past them so the boards stay colored.
+scene.fog = new THREE.Fog(0x6a90b6, 96, 240);
 
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.35, 200);
 camera.position.set(0, CAM_Y, -CAM_BACK);
@@ -95,7 +95,9 @@ camera.lookAt(0, CAM_LOOK_Y, 0.6);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.48, 0.2, 0.64);
+// Face-close boards used to wash out: full-scene bloom on a bright gate quad.
+// Strength 0.28–0.36, threshold ≥ 0.75. Muzzle flashes stay above the threshold.
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.14, 0.86);
 composer.addPass(bloom);
 
 const hemi = new THREE.HemisphereLight(0xfff2d8, 0x6f8f6a, 1.55);
@@ -134,13 +136,19 @@ const flashPlaneGeo = new THREE.PlaneGeometry(1, 1);
 const flashSparkGeo = new THREE.SphereGeometry(0.2, 7, 6);
 const particles = [];
 const FX_CAP = 120;
-const KILL_SHAKE_AMP = 1.5;
-const KILL_SHAKE_DUR = 0.13;
+const KILL_SHAKE_AMP = 2.7;
+const KILL_SHAKE_DUR = 0.22;
 const BOSS_KILL_SHAKE_AMP = 3.1;
 const BOSS_KILL_SHAKE_DUR = 0.18;
-const CORPSE_DUR = 0.7;
+const CORPSE_DUR = 1.05;
 const BOSS_CORPSE_DUR = 0.72;
+const POSE_HOLD_SEC = 0.2;
 const GATE_BOARDS_AHEAD = 3;
+const GATE_CLOSE_Z = 10;
+const GATE_FLASH_NEAR = 6;
+const GATE_EMISSIVE = 0.04;
+const GATE_GLASS_OPACITY = 0.58;
+const GATE_STACK_Y = 0.8;
 const GATE_AHEAD_MAX = 90;
 const GATE_BURST_COUNT = 18;
 const CITY_SEED = 20261101;
@@ -425,7 +433,8 @@ function playDeath(enemy) {
   enemy.knockFromY = enemy.root?.position.y ?? enemy.groundY ?? 0;
   const side = (slot % 2 === 0 ? 1 : -1) * (Math.sign((enemy.x || 0) - playerX) || 1);
   enemy.knockSign = side || 1;
-  enemy.knockX = side * (enemy.isBoss ? 1.35 : 1.3);
+  const rawKnock = side * (enemy.isBoss ? 1.35 : 1.3);
+  enemy.knockX = clampCorpseX(enemy.knockFromX + rawKnock) - enemy.knockFromX;
   enemy.knockZ = enemy.isBoss ? 0.85 : 0.45;
   if (enemy.root) {
     enemy.root.visible = true;
@@ -442,7 +451,13 @@ function playDeath(enemy) {
   });
 }
 
-/** dt knockback. corpseT > 0 stays visible; the downed pose renders one extra frame. */
+/** Landed x stays inside ±roadHalfWidth so a knock cannot fling the body off the lane. */
+function clampCorpseX(x) {
+  const half = level?.roadHalfWidth ?? 3.2;
+  return Math.max(-half, Math.min(half, x));
+}
+
+/** dt knockback. corpseT > 0 stays visible, then the downed pose holds ≥ 0.15s. */
 function stepCorpses(dt) {
   for (const z of zombies) {
     if (!z.dead || !z.root) continue;
@@ -456,16 +471,17 @@ function stepCorpses(dt) {
       const u = Math.min(1, fallT / fallDur);
       const shown = fallT <= 0 ? 0.12 : Math.min(1, 0.3 + u * 0.7);
       const ease = 1 - (1 - shown) * (1 - shown);
-      z.root.position.x = z.knockFromX + (z.knockX || 0) * ease;
+      z.root.position.x = clampCorpseX(z.knockFromX + (z.knockX || 0) * ease);
       z.root.position.z = z.knockFromZ + (z.knockZ || 0) * ease;
       const hop = Math.sin(Math.min(1, Math.max(u, 0.12)) * Math.PI) * (z.isBoss ? 0.65 : 0.58);
       z.root.position.y = (z.knockFromY || 0) + hop;
       z.root.rotation.z = (z.knockSign || 1) * (z.isBoss ? 0.95 : 1.3) * ease;
       z.root.rotation.x = (z.isBoss ? 0.22 : 0.18) * ease;
-      if (z.corpseT <= 0) z.poseHold = 1;
-    } else if (z.poseHold) {
+      if (z.corpseT <= 0) z.poseHold = z.isBoss ? 0.05 : POSE_HOLD_SEC;
+    } else if (z.poseHold > 0) {
       z.root.visible = true;
-      z.poseHold = 0;
+      z.root.position.x = clampCorpseX(z.root.position.x);
+      z.poseHold -= dt;
     } else {
       z.root.visible = false;
     }
@@ -706,46 +722,61 @@ function gateBoardWidth(gate) {
   return Math.min(2.35, 1.85 + Math.max(0, s - 0.55) * 0.42);
 }
 
+/** Rim only. A solid frame slab hid every gate behind the nearest pair. */
+function makeGateRim(w, h, mat) {
+  const g = new THREE.Group();
+  const t = 0.1;
+  const d = 0.08;
+  const specs = [
+    [w + t * 2, t, d, 0, h / 2],
+    [w + t * 2, t, d, 0, -h / 2],
+    [t, h, d, -(w / 2 + t / 2), 0],
+    [t, h, d, w / 2 + t / 2, 0]
+  ];
+  for (const [bw, bh, bd, x, y] of specs) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, bd), mat);
+    mesh.position.set(x, y, 0);
+    g.add(mesh);
+  }
+  return g;
+}
+
 function makeGateVisual(gate, side) {
   const group = new THREE.Group();
   const colors = gateSideColors(gate, side);
   const w = gateBoardWidth(gate);
+  const panelH = 2.2;
   const mat = new THREE.MeshStandardMaterial({
     color: colors.color,
     emissive: colors.emissive,
-    emissiveIntensity: 0.12,
+    emissiveIntensity: GATE_EMISSIVE,
     transparent: true,
-    opacity: 0.96,
-    roughness: 0.48,
-    metalness: 0.02,
-    side: THREE.DoubleSide
+    opacity: 1,
+    roughness: 0.62,
+    metalness: 0,
+    side: THREE.DoubleSide,
+    depthWrite: true,
+    blending: THREE.NormalBlending
   });
-  const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, 2.2), mat);
+  mat.fog = false;
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(w, panelH), mat);
   // Toward the camera, in front of the rim, so the gate color is what you see.
   panel.position.set(0, 1.32, -0.12);
+  panel.name = 'gatePanel';
   group.add(panel);
   const frameMat = new THREE.MeshStandardMaterial({
-    color: colors.emissive,
+    color: colors.frame,
     emissive: colors.emissive,
-    emissiveIntensity: 0.16,
-    roughness: 0.4,
-    metalness: 0.04
+    emissiveIntensity: GATE_EMISSIVE,
+    roughness: 0.55,
+    metalness: 0.02,
+    blending: THREE.NormalBlending
   });
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.16, 2.36, 0.1), frameMat);
+  frameMat.fog = false;
+  const frame = makeGateRim(w, panelH, frameMat);
   frame.position.y = 1.32;
+  frame.name = 'gateFrame';
   group.add(frame);
-  const glowMat = new THREE.MeshBasicMaterial({
-    color: colors.color,
-    transparent: true,
-    opacity: 0.1,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-    blending: THREE.AdditiveBlending
-  });
-  const glow = new THREE.Mesh(new THREE.PlaneGeometry(w + 0.55, 2.7), glowMat);
-  glow.position.set(0, 1.32, 0.1);
-  glow.name = 'gateGlow';
-  group.add(glow);
 
   const labelEl = document.createElement('div');
   labelEl.className = 'gate-num';
@@ -755,13 +786,14 @@ function makeGateVisual(gate, side) {
 
   group.userData.labelEl = labelEl;
   group.userData.labelColor = colors.css;
+  group.userData.panel = panel;
+  group.userData.panelMat = mat;
+  group.userData.frameMat = frameMat;
   group.userData.redraw = (g) => {
-    gate = g;
     labelEl.textContent = gateLabelText(g);
     const sx = gateBoardWidth(g) / w;
     panel.scale.x = sx;
     frame.scale.x = sx;
-    glow.scale.x = sx;
   };
   return group;
 }
@@ -1054,10 +1086,24 @@ function evictParticles(need) {
   }
 }
 
+function nearestGateGap() {
+  if (!state) return Infinity;
+  let best = Infinity;
+  for (const g of gates) {
+    if (g.op === 'finish' || g.consumed) continue;
+    const dz = Math.abs(g.z - state.z);
+    if (dz < best) best = dz;
+  }
+  return best;
+}
+
 function spawnMuzzleFlash(origin) {
   const x = origin.x;
   const y = origin.y;
   const z = origin.z;
+  const nearGate = nearestGateGap() < GATE_FLASH_NEAR;
+  const scaleMul = nearGate ? 0.35 : 1;
+  const dim = nearGate ? 0.45 : 1;
   evictParticles(3);
   const makeMat = (color, opacity) => {
     const mat = new THREE.MeshBasicMaterial({
@@ -1082,15 +1128,16 @@ function spawnMuzzleFlash(origin) {
     });
   };
   // Wide disc at the muzzle, high enough to clear the helmet from the chase cam.
-  const core = new THREE.Mesh(flashPlaneGeo, makeMat(0xfff8d0, 1));
+  // Within 6m of a gate the flash shrinks and dims so it does not white out the board.
+  const core = new THREE.Mesh(flashPlaneGeo, makeMat(0xfff8d0, dim));
   core.position.set(x, y, z);
-  push(core, 0.1, 1.55);
-  const halo = new THREE.Mesh(flashPlaneGeo, makeMat(0xff6a00, 0.98));
+  push(core, 0.1, 1.55 * scaleMul);
+  const halo = new THREE.Mesh(flashPlaneGeo, makeMat(0xff6a00, 0.98 * dim));
   halo.position.set(x, y, z - 0.04);
-  push(halo, 0.13, 2.45);
-  const spark = new THREE.Mesh(flashSparkGeo, makeMat(0xfff1a8, 1));
+  push(halo, 0.13, 2.45 * scaleMul);
+  const spark = new THREE.Mesh(flashSparkGeo, makeMat(0xfff1a8, dim));
   spark.position.set(x, y, z + 0.14);
-  push(spark, 0.11, 1.45);
+  push(spark, 0.11, 1.45 * scaleMul);
 }
 
 function updateParticles(dt) {
@@ -1185,8 +1232,27 @@ function updateFloats(dt) {
   }
 }
 
-/** Next 2–3 gate pairs keep their 3D boards. HTML digits mark only the nearest pair. */
-function updateGateLabels() {
+function tuneGateSurface(g, rank, rankCount, dz) {
+  const ud = g.visual?.userData;
+  if (!ud?.panelMat) return;
+  const close = dz < GATE_CLOSE_Z && dz > -1.5;
+  const hasBehind = rank >= 0 && rank < rankCount - 1;
+  const glassy = hasBehind && !close;
+  const emis = close ? 0 : GATE_EMISSIVE;
+  ud.panelMat.emissiveIntensity = emis;
+  ud.panelMat.opacity = glassy ? GATE_GLASS_OPACITY : 1;
+  ud.panelMat.depthWrite = !glassy;
+  ud.panelMat.blending = THREE.NormalBlending;
+  ud.panelMat.transparent = true;
+  if (ud.panel) ud.panel.renderOrder = 10 - Math.max(0, rank);
+  if (ud.frameMat) {
+    ud.frameMat.emissiveIntensity = emis;
+    ud.frameMat.blending = THREE.NormalBlending;
+  }
+}
+
+/** Next 2–3 gate pairs keep colored 3D boards. HTML digits mark only the nearest pair. */
+function updateGateLabels(dt = 0) {
   const w = innerWidth, h = innerHeight;
   const zNow = state ? state.z : 0;
   const pairMap = new Map();
@@ -1199,14 +1265,24 @@ function updateGateLabels() {
     pairMap.get(key).push(g);
   }
   const aheadZs = [...pairMap.keys()].sort((a, b) => a - b);
-  const boards = new Set(aheadZs.slice(0, GATE_BOARDS_AHEAD));
-  const labelZ = aheadZs.length ? aheadZs[0] : null;
+  const shownZs = aheadZs.slice(0, GATE_BOARDS_AHEAD);
+  const boards = new Set(shownZs);
+  const labelZ = shownZs.length ? shownZs[0] : null;
+  const rankOf = new Map(shownZs.map((z, i) => [z, i]));
 
   for (const g of gates) {
     if (g.op === 'finish') continue;
     const key = Math.round(g.z * 10) / 10;
     const showBoard = boards.has(key) && !g.consumed;
     if (g.visual && !g.consumed) g.visual.visible = showBoard;
+    if (g.visual && showBoard) {
+      const rank = rankOf.get(key) ?? 0;
+      const dz = g.z - zNow;
+      tuneGateSurface(g, rank, shownZs.length, dz);
+      const targetY = rank * GATE_STACK_Y;
+      const k = dt > 0 ? Math.min(1, dt * 8) : 1;
+      g.visual.position.y += (targetY - g.visual.position.y) * k;
+    }
     const el = g.visual?.userData?.labelEl;
     if (!el) continue;
     const isNearest = labelZ != null && key === labelZ && !g.consumed;
@@ -1347,9 +1423,9 @@ function poseCamera(dt = 0) {
   const lookY = CAM_LOOK_Y + (BOSS_CAM_LOOK_Y - CAM_LOOK_Y) * u;
   const lookAhead = CAM_LOOK_AHEAD + (BOSS_CAM_LOOK_AHEAD - CAM_LOOK_AHEAD) * u;
   const z0 = state ? state.z : 0;
-  const camX = (Math.random() - 0.5) * shake * 0.62;
-  const camY = camHeight + (Math.random() - 0.5) * shake * 0.32;
-  const camZ = z0 - back + (Math.random() - 0.5) * shake * 0.16;
+  const camX = (Math.random() - 0.5) * shake * 1.24;
+  const camY = camHeight + (Math.random() - 0.5) * shake * 0.64;
+  const camZ = z0 - back + (Math.random() - 0.5) * shake * 0.32;
   camera.position.set(camX, camY, camZ);
   camera.lookAt(camX, lookY, z0 + lookAhead);
   camera.updateMatrixWorld();
@@ -1676,7 +1752,7 @@ function render() {
   syncBossHpBarVisibility();
   updateSquadPlus();
   updateFloats(dt);
-  updateGateLabels();
+  updateGateLabels(dt);
   if (DEBUG) updateDebugOverlay(camX, camY, camZ);
 
   city.position.z = (state ? state.z * 0.35 : 0);
